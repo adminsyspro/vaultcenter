@@ -1,0 +1,14 @@
+diff --git a/kernel/mhvtl.c b/kernel/mhvtl.c
+index c51c1b9..1bc42f4 100644
+--- a/kernel/mhvtl.c
++++ b/kernel/mhvtl.c
+@@ -185,7 +185,8 @@ static int mhvtl_major = 0;
+ 
+ #define DEF_MAX_MINOR_NO 1024 /* Max number of minor nos. this driver will handle */
+ 
+-#define VTL_CANQUEUE	1 /* needs to be >= 1 */
++/* One pending command per LUN; independent LUNs must not block each other. */
++#define VTL_CANQUEUE	128
+ #define VTL_MAX_CMD_LEN 16
+ 
+ static struct kmem_cache *dsp;

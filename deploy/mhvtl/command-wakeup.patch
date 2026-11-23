@@ -1,0 +1,296 @@
+--- a/kernel/mhvtl.c
++++ b/kernel/mhvtl.c
+@@ -99,6 +99,8 @@
+ 
+ #include <scsi/scsi_driver.h>
+ #include <scsi/scsi_ioctl.h>
++#include <linux/poll.h>
++#include <linux/bitmap.h>
+ 
+ /* version of scsi_debug I started from
+  #define VTL_VERSION "1.75"
+@@ -219,6 +221,10 @@
+ };
+ 
+ static struct mhvtl_lu_info *devp[DEF_MAX_MINOR_NO];
++/* Queues outlive LU removal; an open file pins this module. */
++static wait_queue_head_t command_wait[DEF_MAX_MINOR_NO];
++/* release() owns LU teardown: a second open must never acquire that ownership. */
++static DECLARE_BITMAP(mhvtl_open_minors, DEF_MAX_MINOR_NO);
+ 
+ struct mhvtl_hba_info {
+ 	struct list_head  hba_sibling; /* List of adapters */
+@@ -382,7 +388,10 @@
+ 	.module = THIS_MODULE,
+ };
+ 
++static __poll_t mhvtl_poll(struct file *, poll_table *);
++
+ static const struct file_operations mhvtl_fops = {
++	.poll = mhvtl_poll,
+ 	.owner = THIS_MODULE,
+ #if defined(HAVE_UNLOCKED_IOCTL)
+ 	.unlocked_ioctl = mhvtl_c_ioctl,
+@@ -573,6 +582,7 @@
+ 	spin_lock_irqsave(&lu->cmd_list_lock, iflags);
+ 	list_add_tail(&sqcp->queued_sibling, &lu->cmd_list);
+ 	spin_unlock_irqrestore(&lu->cmd_list_lock, iflags);
++	wake_up_interruptible(&command_wait[lu->minor]);
+ 
+ 	if ((mhvtl_opts & VTL_OPT_NOISE) >= 2)
+ 		mhvtl_dump_queued_list();
+@@ -875,6 +885,7 @@
+ 			  (unsigned long long)sdp->lun);
+ 	if (lu) {
+ 		pr_debug("Removing lu structure, minor %d\n", lu->minor);
++		spin_lock_irqsave(&mhvtl_hba_list_lock, iflags);
+ 		/* make this slot avaliable for re-use */
+ 		if (lu->minor < DEF_MAX_MINOR_NO)
+ 			devp[lu->minor] = NULL;
+@@ -883,7 +894,6 @@
+ 		 * leaving the entry linked makes it dereference and free memory
+ 		 * that is already gone.
+ 		 */
+-		spin_lock_irqsave(&mhvtl_hba_list_lock, iflags);
+ 		list_del_init(&lu->lu_sibling);
+ 		spin_unlock_irqrestore(&mhvtl_hba_list_lock, iflags);
+ 		kfree(sdp->hostdata);
+@@ -1147,9 +1157,8 @@
+ 
+ 	lu->sense_buff[0] = 0x70;
+ 	lu->sense_buff[7] = 0xa;
+-	devp[minor]		  = lu;
+-
+ 	spin_lock_irqsave(&mhvtl_hba_list_lock, hba_iflags);
++	devp[minor] = lu;
+ 	list_add_tail(&lu->lu_sibling, &mhvtl_hba->lu_list);
+ 	spin_unlock_irqrestore(&mhvtl_hba_list_lock, hba_iflags);
+ 
+@@ -1284,7 +1293,10 @@
+ }
+ 
+ static int __init mhvtl_init(void) {
+-	int ret;
++	int ret, i;
++
++	for (i = 0; i < DEF_MAX_MINOR_NO; i++)
++		init_waitqueue_head(&command_wait[i]);
+ 
+ 	memset(&devp, 0, sizeof(devp));
+ 
+@@ -1563,6 +1575,7 @@
+ 	struct list_head	  *lh, *lh_sf;
+ 	struct mhvtl_hba_info *mhvtl_hba;
+ 	struct mhvtl_lu_info  *lu;
++	unsigned long flags;
+ 
+ 	mhvtl_hba = to_mhvtl_hba(dev);
+ 
+@@ -1583,6 +1596,7 @@
+ 	/* sdev_destroy() unlinks and frees each LU, so this normally finds an
+ 	 * empty list; it still runs for LUs that never had a scsi_device.
+ 	 */
++	spin_lock_irqsave(&mhvtl_hba_list_lock, flags);
+ 	list_for_each_safe(lh, lh_sf, &mhvtl_hba->lu_list) {
+ 		lu = list_entry(lh, struct mhvtl_lu_info,
+ 						lu_sibling);
+@@ -1595,6 +1609,7 @@
+ 		kfree(lu);
+ 	}
+ 
++	spin_unlock_irqrestore(&mhvtl_hba_list_lock, flags);
+ 	scsi_host_put(mhvtl_hba->shost);
+ 	mhvtl_hba->shost = NULL;
+ 	return 0;
+@@ -1700,6 +1715,36 @@
+ give_up:
+ 	kmem_cache_free(dsp, ds);
+ 	return ret;
++}
++
++/* Register before checking so an arrival cannot be lost between the two.
++ * poll only observes readiness; VTL_POLL_AND_GET_HEADER claims commands.
++ * No LU (startup/removal) stays idle until the bounded userspace timeout.
++ */
++static __poll_t mhvtl_poll(struct file *file, poll_table *wait) {
++	unsigned int minor = iminor(file_inode(file));
++	unsigned long flags;
++	struct mhvtl_lu_info *lu;
++	struct mhvtl_queued_cmd *cmd;
++	__poll_t ready = 0;
++
++	if (minor >= DEF_MAX_MINOR_NO)
++		return EPOLLERR;
++	poll_wait(file, &command_wait[minor], wait);
++	spin_lock_irqsave(&mhvtl_hba_list_lock, flags);
++	lu = devp[minor];
++	if (lu) {
++		spin_lock(&lu->cmd_list_lock);
++		list_for_each_entry(cmd, &lu->cmd_list, queued_sibling) {
++			if (cmd->state == CMD_STATE_QUEUED) {
++				ready = EPOLLIN | EPOLLRDNORM;
++				break;
++			}
++		}
++		spin_unlock(&lu->cmd_list_lock);
++	}
++	spin_unlock_irqrestore(&mhvtl_hba_list_lock, flags);
++	return ready;
+ }
+ 
+ static int send_mhvtl_header(unsigned int minor, char __user *arg) {
+@@ -1865,6 +1910,9 @@
+ 
+ 	switch (cmd) {
+ 
++	case VTL_GET_CAPABILITIES:
++		return VTL_CAP_COMMAND_POLL;
++
+ 	case VTL_POLL_AND_GET_HEADER:
+ 		if (!devp[minor]) {
+ 			struct mhvtl_header idle_hdr;
+@@ -1948,12 +1996,17 @@
+ 		scsi_device_put(sdev);
+ 	}
+ 
++	clear_bit(minor, mhvtl_open_minors);
+ 	return 0;
+ }
+ 
+ static int mhvtl_open(struct inode *inode, struct file *filp) {
+ 	unsigned int minor = iminor(inode);
+ 
++	if (minor >= DEF_MAX_MINOR_NO)
++		return -ENODEV;
++	if (test_and_set_bit(minor, mhvtl_open_minors))
++		return -EBUSY;
+ 	pr_debug("mhvtl%u: opened\n", minor);
+ 	return 0;
+ }
+--- a/include/common/vtl_common.h
++++ b/include/common/vtl_common.h
+@@ -15,6 +15,9 @@
+ #define VTL_GET_DATA			0x201
+ #define VTL_PUT_DATA			0x203
+ #define VTL_REMOVE_LU			0x205
++/* Returns a feature bitmask directly, no userspace pointer argument. */
++#define VTL_GET_CAPABILITIES 0x206
++#define VTL_CAP_COMMAND_POLL 0x01
+ 
+ #define VENDOR_ID_LEN	8
+ #define PRODUCT_ID_LEN	16
+--- a/include/transport.h
++++ b/include/transport.h
+@@ -73,6 +73,9 @@
+ 	 * close: Shut down the transport for this LU.
+ 	 */
+ 	void (*close)(int handle);
++
++	/* Optional bounded idle wait; NULL backends retain usleep(). */
++	void (*wait_cmd)(int handle, unsigned int timeout_us);
+ };
+ 
+ /* Global transport backend, selected at startup. */
+--- a/usr/transport_mhvtl.c
++++ b/usr/transport_mhvtl.c
+@@ -23,6 +23,9 @@
+ #include "logging.h"
+ #include "vtllib.h"
+ #include "transport.h"
++#include "vaultcenter_command_wait.h"
++
++static struct vaultcenter_command_wait command_wait;
+ 
+ extern char mhvtl_driver_name[];
+ 
+@@ -176,12 +179,21 @@
+  */
+ static int mhvtl_open(unsigned minor, struct mhvtl_ctl *ctl)
+ {
++	int fd;
+ 	if (chrdev_create(minor)) {
+ 		MHVTL_DBG(1, "Unable to create device node mhvtl%u", minor);
+ 		return -1;
+ 	}
+ 
+-	return chrdev_open("mhvtl", minor);
++	fd = chrdev_open("mhvtl", minor);
++	if (fd >= 0)
++		vaultcenter_command_wait_init(&command_wait, fd);
++	return fd;
++}
++
++static void mhvtl_wait_cmd(int fd, unsigned int timeout_us)
++{
++	vaultcenter_command_wait_for(&command_wait, fd, timeout_us);
+ }
+ 
+ static int mhvtl_poll_cmd(int fd, struct mhvtl_header *hdr)
+@@ -304,6 +316,7 @@
+ 	.name      = "mhvtl",
+ 	.open      = mhvtl_open,
+ 	.poll_cmd  = mhvtl_poll_cmd,
++	.wait_cmd  = mhvtl_wait_cmd,
+ 	.get_data  = mhvtl_get_data,
+ 	.put_data  = mhvtl_put_data,
+ 	.add_lu    = mhvtl_add_lu,
+--- a/usr/cmd/vtltape.c
++++ b/usr/cmd/vtltape.c
+@@ -2651,7 +2651,10 @@
+ 			case VTL_IDLE:
+ 				apply_mount_complete();
+ 				report_caught_signal();
+-				usleep(sleep_time);
++				if (vtl_transport->wait_cmd)
++					vtl_transport->wait_cmd(cdev, sleep_time);
++				else
++					usleep(sleep_time);
+ 
+ 				/* While nothing to do, increase
+ 				 * time we sleep before polling again.
+--- /dev/null
++++ b/include/vaultcenter_command_wait.h
+@@ -0,0 +1,43 @@
++#ifndef VAULTCENTER_COMMAND_WAIT_H
++#define VAULTCENTER_COMMAND_WAIT_H
++
++#include <errno.h>
++#include <poll.h>
++#include <sys/ioctl.h>
++#include <time.h>
++#include <unistd.h>
++#include "vtl_common.h"
++
++struct vaultcenter_command_wait {
++	int supported;
++};
++
++static inline void vaultcenter_command_wait_init(struct vaultcenter_command_wait *wait, int fd)
++{
++	int saved_errno = errno;
++	int capabilities = ioctl(fd, VTL_GET_CAPABILITIES, 0);
++	wait->supported = capabilities >= 0 && (capabilities & VTL_CAP_COMMAND_POLL);
++	errno = saved_errno;
++}
++
++static inline void vaultcenter_command_wait_for(struct vaultcenter_command_wait *wait,
++		int fd, unsigned int timeout_us)
++{
++	if (wait->supported) {
++		struct pollfd pfd = { .fd = fd, .events = POLLIN };
++		struct timespec timeout = {
++			.tv_sec = timeout_us / 1000000,
++			.tv_nsec = (timeout_us % 1000000) * 1000
++		};
++		int ret = ppoll(&pfd, 1, &timeout, NULL);
++		if (ret < 0 && errno == EINTR)
++			return; /* Return to signal and administration handling immediately. */
++		if (ret >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
++			return;
++		/* Never busy-loop on an unsupported/broken wait implementation. */
++		wait->supported = 0;
++	}
++	usleep(timeout_us);
++}
++
++#endif

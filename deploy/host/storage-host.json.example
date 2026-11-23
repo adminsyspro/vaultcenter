@@ -1,0 +1,11 @@
+{
+  "compose_file": "/opt/vaultcenter/compose.yaml",
+  "project": "vaultcenter",
+  "container": "vaultcenter-appliance-1",
+  "state_dir": "/var/lib/docker/volumes/vaultcenter_state/_data",
+  "media_dir": "/var/lib/docker/volumes/vaultcenter_media/_data",
+  "host_state": "/var/lib/vaultcenter-host",
+  "socket": "/run/vaultcenter-host/storage.sock",
+  "bootstrap": false,
+  "forbidden": ["/opt/vaultcenter"]
+}

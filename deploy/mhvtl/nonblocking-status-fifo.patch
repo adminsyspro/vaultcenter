@@ -1,0 +1,82 @@
+--- a/usr/vtllib.c
++++ b/usr/vtllib.c
+@@ -959,7 +959,7 @@
+  * Return errno on failure
+  */
+ int open_fifo(FILE **fifo_fd, char *fifoname) {
+-	int ret;
++	int ret, fd;
+ 
+ 	umask(0);
+ 	ret = 0;
+@@ -970,7 +970,12 @@
+ 				  fifoname, strerror(errno));
+ 		ret = errno;
+ 	} else {
+-		*fifo_fd = fopen(fifoname, "w+");
++		/* RDWR keeps SIGPIPE away when the observer exits. Never block
++         * tape I/O on the optional observer, even when the pipe is full. */
++        fd = open(fifoname, O_RDWR | O_NONBLOCK | O_NOFOLLOW);
++        *fifo_fd = fd < 0 ? NULL : fdopen(fd, "r+");
++        if (fd >= 0 && !*fifo_fd)
++            close(fd);
+ 		if (*fifo_fd) {
+ 			MHVTL_DBG(2, "Successfully opened named pipe: %s",
+ 					  fifoname);
+@@ -985,32 +990,30 @@
+ }
+ 
+ void status_change(FILE *fifo_fd, int current_status, int m_id, char **msg) {
+-	time_t	 t;
+-	char	*timestamp;
+-	unsigned i;
+-
+-	if (!fifo_fd)
+-		return;
+-
+-	t		  = time(NULL);
+-	timestamp = ctime(&t);
+-
+-	for (i = 14; i < strlen(timestamp); i++)
+-		if (timestamp[i] == '\n')
+-			timestamp[i] = '\0';
+-
+-	if (*msg) {
+-		fprintf(fifo_fd, "%s - %d: - %s\n",
+-				timestamp, m_id, *msg);
+-		free(*msg);
+-		*msg = NULL;
+-	} else
+-		fprintf(fifo_fd, "%s - %d: - %s\n", timestamp, m_id,
+-				state_desc[current_status].state_desc);
+-
+-	fflush_unlocked(fifo_fd);
+-
+-	return;
++    time_t t;
++    char timestamp[32], record[512]; /* POSIX minimum PIPE_BUF */
++    const char *description;
++    int length;
++
++    if (!fifo_fd)
++        return;
++    t = time(NULL);
++    if (!ctime_r(&t, timestamp))
++        return;
++    timestamp[strcspn(timestamp, "\n")] = '\0';
++    description = *msg ? *msg : state_desc[current_status].state_desc;
++    length = snprintf(record, sizeof(record), "%s - %d: - %s\n",
++                      timestamp, m_id, description);
++    if (*msg) {
++        free(*msg);
++        *msg = NULL;
++    }
++    /* One complete atomic record or none. EAGAIN drops an observation;
++     * there is no retry, stdio buffering or logging on the data path. */
++    if (length > 0 && (size_t)length < sizeof(record)) {
++        ssize_t result = write(fileno(fifo_fd), record, (size_t)length);
++        (void)result;
++    }
+ }
+ 
+ /*

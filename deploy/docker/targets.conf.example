@@ -1,0 +1,11 @@
+default-driver iscsi
+
+<target iqn.2026-09.net.example.vaultcenter:library10>
+    device-type pt
+    bs-type sg
+    backing-store /dev/tape/by-id/scsi-COLDVTL001
+    backing-store /dev/tape/by-id/cold-vtl-drive-sg
+    allow-in-use yes
+    # Replace with the authorized PBS IP; never use ALL.
+    initiator-address 192.0.2.10
+</target>

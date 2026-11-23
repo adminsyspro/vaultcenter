@@ -1,0 +1,21 @@
+[package]
+name = "cold-vtl-worker"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+uuid.workspace = true
+base64 = "0.22"
+sqlx.workspace = true
+clap.workspace = true
+cold-vtl-core = { path = "../cold-vtl-core" }
+cold-vtl-provider-s3 = { path = "../cold-vtl-provider-s3" }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+axum.workspace = true

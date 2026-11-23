@@ -1,0 +1,30 @@
+[Unit]
+Description=VaultCenter control plane
+After=network-online.target mhvtl.target tgt.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/cold-vtl/s3.env
+EnvironmentFile=/etc/cold-vtl/auth.env
+Environment=COLD_VTL_DATABASE=/var/lib/cold-vtl/catalog.db
+Environment=COLD_VTL_TELEMETRY_DIR=/run/vaultcenter/telemetry
+Environment=COLD_VTL_MEDIA_ROOT=/opt/mhvtl
+Environment=COLD_VTL_WORKER=/usr/local/bin/cold-vtl-worker
+Environment=COLD_VTL_RESTORE_ROOT=/var/lib/cold-vtl/restores
+Environment=COLD_VTL_QUIESCE_CHECK=/usr/local/libexec/cold-vtl-check-quiescent
+ExecStart=/usr/local/bin/cold-vtld
+Restart=on-failure
+RestartSec=3
+StateDirectory=cold-vtl
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cold-vtl
+ReadOnlyPaths=/opt/mhvtl /etc/cold-vtl
+
+[Install]
+WantedBy=multi-user.target

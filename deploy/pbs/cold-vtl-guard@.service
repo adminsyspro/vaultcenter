@@ -1,0 +1,20 @@
+[Unit]
+Description=VaultCenter PBS tape maintenance lease for VTL %i
+Before=proxmox-backup.service proxmox-backup-proxy.service
+ConditionPathExists=/etc/cold-vtl-guard/vtls/%i.json
+
+[Service]
+Type=notify
+ExecStart=/usr/local/libexec/cold-vtl-pbs-guard --vtl %i serve
+Restart=on-failure
+RestartSec=2
+StateDirectory=cold-vtl-guard/vtls/%i
+RuntimeDirectory=cold-vtl-guard/%i
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cold-vtl-guard/vtls/%i /var/lib/proxmox-backup/tape /run
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,174 @@
+diff --git a/include/vaultcenter_telemetry.h b/include/vaultcenter_telemetry.h
+new file mode 100644
+index 0000000..77e1056
+--- /dev/null
++++ b/include/vaultcenter_telemetry.h
+@@ -0,0 +1,57 @@
++/* Optional read-only VaultCenter observer. GPL-2.0-or-later, like mhVTL.
++ * Single-threaded caller; one atomic nonblocking FIFO record per second.
++ * No retry, allocation, payload access or observer dependency on tape I/O.
++ */
++#ifndef VAULTCENTER_TELEMETRY_H
++#define VAULTCENTER_TELEMETRY_H
++#include <stdio.h>
++#include <stdint.h>
++#include <inttypes.h>
++#include <unistd.h>
++#include <string.h>
++#include <errno.h>
++#include <time.h>
++
++static void vaultcenter_status_at(FILE *fifo, int queue, const char *state,
++        const char *barcode, uint64_t generation, uint64_t written,
++        uint64_t read_bytes, uint64_t at_ms, uint64_t mono_ms)
++{
++    static uint64_t emitted, previous_write, previous_read, previous_generation;
++    static uint64_t write_changed, read_changed;
++    char record[512], label[40];
++    int length;
++    if (!fifo)
++        return;
++    if (written != previous_write || generation != previous_generation)
++        write_changed = mono_ms;
++    if (read_bytes != previous_read || generation != previous_generation)
++        read_changed = mono_ms;
++    previous_write = written;
++    previous_read = read_bytes;
++    previous_generation = generation;
++    if (emitted && mono_ms - emitted < 1000)
++        return;
++    emitted = mono_ms;
++    if (!strcmp(state, "Writing") && mono_ms - write_changed >= 3000)
++        state = barcode ? "Loaded - Idle" : "Idle";
++    if (!strcmp(state, "Reading") && mono_ms - read_changed >= 3000)
++        state = barcode ? "Loaded - Idle" : "Idle";
++    strcpy(label, "null");
++    if (barcode) {
++        size_t n = strlen(barcode);
++        if (!n || n > 32 || strspn(barcode,
++                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") != n)
++            return;
++        snprintf(label, sizeof(label), "\"%s\"", barcode);
++    }
++    length = snprintf(record, sizeof(record),
++        "{\"vaultcenter\":1,\"queue\":%d,\"pid\":%ld,\"at_ms\":%" PRIu64
++        ",\"mono_ms\":%" PRIu64 ",\"generation\":%" PRIu64
++        ",\"bytes_written\":%" PRIu64 ",\"barcode\":%s,\"state\":\"%s\"}\n",
++        queue, (long)getpid(), at_ms, mono_ms, generation, written, label, state);
++    if (length > 0 && (size_t)length < sizeof(record)) {
++        ssize_t result = write(fileno(fifo), record, (size_t)length);
++        (void)result;
++    }
++}
++#endif
+diff --git a/include/ssc.h b/include/ssc.h
+index 31f3270..332395f 100644
+--- a/include/ssc.h
++++ b/include/ssc.h
+@@ -167,6 +167,8 @@ struct priv_lu_ssc {
+ 	uint64_t bytesRead_M;			/* Bytes read from media */
+ 	uint64_t bytesRead_I;			/* Bytes read and sent to initiator */
+ 	uint64_t bytesWritten_M;		/* Bytes written to media (compressed) */
++	uint64_t vaultcenter_written; /* Successful payload bytes, lifetime of process */
++	uint64_t vaultcenter_generation; /* Changes on every load, including same barcode */
+ 	uint64_t bytesWritten_I;		/* Bytes recevied from initiator */
+ 
+ 	/* Allow to insert delays into op codes */
+diff --git a/include/vtllib.h b/include/vtllib.h
+index e36b0ac..8e0b074 100644
+--- a/include/vtllib.h
++++ b/include/vtllib.h
+@@ -805,6 +805,7 @@ void  hex_dump(uint8_t *, int);
+ void *zalloc(int sz);
+ int	  oom_adjust(void);
+ int	  open_fifo(FILE **fifo_fd, char *fifoname);
++const char *vaultcenter_state_description(int state);
+ void  status_change(FILE *fifo_fd, int current_status, int my_id, char **msg);
+ 
+ char *readline(char *s, int len, FILE *f);
+diff --git a/usr/cmd/vtltape.c b/usr/cmd/vtltape.c
+index 2e465ed..148d358 100644
+--- a/usr/cmd/vtltape.c
++++ b/usr/cmd/vtltape.c
+@@ -81,6 +81,7 @@
+ #include "mhvtl_log.h"
+ #include "mode.h"
+ #include "transport.h"
++#include "vaultcenter_telemetry.h"
+ 
+ char mhvtl_driver_name[] = "vtltape";
+ 
+@@ -1328,6 +1329,7 @@ int loadTape(char *PCL, uint8_t *sam_stat) {
+ 	struct media_details *m_detail;
+ 	struct lu_phy_attr	 *lu;
+ 
++	lu_ssc.vaultcenter_generation++;
+ 	lu_ssc.bytesWritten_I = 0; /* Global - Bytes written this load */
+ 	lu_ssc.bytesWritten_M = 0; /* Global - Bytes written this load */
+ 	lu_ssc.bytesRead_I	  = 0; /* Global - Bytes read this load */
+@@ -2654,6 +2656,17 @@ int main(int argc, char *argv[]) {
+ 				sleep(1);
+ 				break;
+ 			}
++            if (lunit.fifo_fd) {
++                struct timespec wall, mono;
++                if (!clock_gettime(CLOCK_REALTIME, &wall) &&
++                    !clock_gettime(CLOCK_MONOTONIC, &mono))
++                    vaultcenter_status_at(lunit.fifo_fd, my_id,
++                        vaultcenter_state_description(current_state), lu_ssc.barcode,
++                        lu_ssc.vaultcenter_generation, lu_ssc.vaultcenter_written,
++                        lu_ssc.bytesRead_I,
++                        (uint64_t)wall.tv_sec * 1000 + wall.tv_nsec / 1000000,
++                        (uint64_t)mono.tv_sec * 1000 + mono.tv_nsec / 1000000);
++            }
+ 			if (current_state != last_state) {
+ 				status_change(lunit.fifo_fd,
+ 							  current_state,
+diff --git a/usr/mhvtl_io.c b/usr/mhvtl_io.c
+index aa80e60..596dca6 100644
+--- a/usr/mhvtl_io.c
++++ b/usr/mhvtl_io.c
+@@ -798,6 +798,8 @@ int writeBlock(struct scsi_cmd *cmd, uint32_t src_sz, uint32_t src_offset) {
+ 		return 0;
+ 	}
+ 
++	lu_priv->vaultcenter_written += src_len;
++
+ 	current_position = current_tape_offset();
+ 
+ 	/* Early warning sits a fixed distance from the end of the partition */
+diff --git a/usr/vtllib.c b/usr/vtllib.c
+index 790da59..2984653 100644
+--- a/usr/vtllib.c
++++ b/usr/vtllib.c
+@@ -989,6 +989,30 @@ int open_fifo(FILE **fifo_fd, char *fifoname) {
+ 	return ret;
+ }
+ 
++const char *vaultcenter_state_description(int state) {
++    /* Do not index the legacy state_desc table: its removed NULL-media
++     * entry shifts the drive states in this pinned upstream revision. */
++    switch (state) {
++    case MHVTL_STATE_IDLE: return "Idle";
++    case MHVTL_STATE_UNLOADED: return "Idle";
++    case MHVTL_STATE_LOADING: return "Loading";
++    case MHVTL_STATE_LOADING_CLEAN: return "Loading Cleaning Tape";
++    case MHVTL_STATE_LOADING_WORM: return "Loading WORM media";
++    case MHVTL_STATE_LOADED: return "Loaded";
++    case MHVTL_STATE_LOADED_IDLE: return "Loaded - Idle";
++    case MHVTL_STATE_LOAD_FAILED: return "Load failed";
++    case MHVTL_STATE_REWIND: return "Rewinding";
++    case MHVTL_STATE_POSITIONING: return "Positioning";
++    case MHVTL_STATE_LOCATE: return "Locate";
++    case MHVTL_STATE_READING: return "Reading";
++    case MHVTL_STATE_WRITING: return "Writing";
++    case MHVTL_STATE_UNLOADING: return "Unloading";
++    case MHVTL_STATE_ERASE: return "Erasing";
++    case MHVTL_STATE_VERIFY: return "Verifying";
++    default: return "Initialising v2";
++    }
++}
++
+ void status_change(FILE *fifo_fd, int current_status, int m_id, char **msg) {
+     time_t t;
+     char timestamp[32], record[512]; /* POSIX minimum PIPE_BUF */

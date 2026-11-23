@@ -1,0 +1,235 @@
+name: CI and Docker appliance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libssl-dev zlib1g-dev shellcheck
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.96.1
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-1.96.1-${{ hashFiles('Cargo.lock') }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: python3 -m unittest discover -s deploy/tests -p 'test_*.py'
+      - name: Check optional mhVTL producer telemetry
+        run: |
+          git init /tmp/vaultcenter-mhvtl
+          git -C /tmp/vaultcenter-mhvtl fetch --depth=1 https://github.com/markh794/mhvtl.git 59f32ee50b3269c118965bffa29cf38b1553268f
+          git -C /tmp/vaultcenter-mhvtl checkout --detach FETCH_HEAD
+          python3 deploy/tests/check_mhvtl_fifo.py /tmp/vaultcenter-mhvtl
+          git -C /tmp/vaultcenter-mhvtl apply "$PWD/deploy/mhvtl/nonblocking-status-fifo.patch" "$PWD/deploy/mhvtl/telemetry-heartbeat.patch"
+          python3 deploy/tests/check_mhvtl_telemetry.py /tmp/vaultcenter-mhvtl
+          python3 deploy/tests/check_mhvtl_launch.py /tmp/vaultcenter-mhvtl
+          git -C /tmp/vaultcenter-mhvtl apply "$PWD/deploy/mhvtl/bandwidth.patch" "$PWD/deploy/mhvtl/parallel-host-queue.patch" "$PWD/deploy/mhvtl/online-cartridges.patch" "$PWD/deploy/mhvtl/command-wakeup.patch"
+          python3 deploy/tests/check_mhvtl_online_cartridges.py --source /tmp/vaultcenter-mhvtl
+          python3 deploy/tests/check_mhvtl_command_wakeup.py --source /tmp/vaultcenter-mhvtl
+          git -C /tmp/vaultcenter-mhvtl apply "$PWD/deploy/mhvtl/media-lock.patch"
+          python3 deploy/tests/check_mhvtl_media_lock.py --source /tmp/vaultcenter-mhvtl
+          make -C /tmp/vaultcenter-mhvtl -j2 usr
+          python3 deploy/tests/check_mhvtl_media_backend.py --source /tmp/vaultcenter-mhvtl
+      - run: shellcheck release.sh deploy/docker/*.sh deploy/install/*.sh deploy/tests/*.sh
+      - name: Version files agree
+        run: bash deploy/tests/check_release_version.sh
+      - name: Former product name only in historical records
+        run: bash deploy/tests/check_product_name.sh
+      - name: Validate Compose
+        env:
+          VAULTCENTER_IMAGE: vaultcenter:ci
+        run: docker compose -f deploy/docker/compose.yaml config --quiet
+
+  dkms:
+    # The mhvtl module is built on the customer's host by DKMS: prove it
+    # compiles against the kernel headers current Debian releases ship.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13']
+    container: ${{ matrix.image }}
+    # In a container job the default shell is `sh -e`: Debian's dash knows no
+    # `set -o pipefail`. bash is part of the debian images.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Build tools and kernel headers
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bash git ca-certificates build-essential dkms linux-headers-amd64 kmod
+      - uses: actions/checkout@v7
+      - name: Patched mhvtl source archive, as the Dockerfile makes it
+        run: |
+          set -euo pipefail
+          src=/tmp/mhvtl
+          git init "$src"
+          git -C "$src" remote add origin https://github.com/markh794/mhvtl.git
+          git -C "$src" fetch --depth=1 origin 59f32ee50b3269c118965bffa29cf38b1553268f
+          git -C "$src" checkout --detach FETCH_HEAD
+          test "$(git -C "$src" rev-parse HEAD)" = 59f32ee50b3269c118965bffa29cf38b1553268f
+          # Same patches, same order as the mhvtl stage of the Dockerfile.
+          for patch in nonblocking-status-fifo telemetry-heartbeat bandwidth parallel-host-queue online-cartridges command-wakeup media-lock control-extension slot-map; do
+            git -C "$src" apply "$PWD/deploy/mhvtl/$patch.patch"
+          done
+          # The script the mhvtl stage of the Dockerfile uses: same tree, same archive.
+          sh deploy/mhvtl/source-archive.sh "$src" /tmp/mhvtl-source.tar.gz
+      - name: Compile the module with DKMS for the installed headers
+        run: |
+          set -euo pipefail
+          version="$(bash deploy/install/prepare-dkms-source.sh /tmp/mhvtl-source.tar.gz / "$PWD/deploy/install/dkms.conf")"
+          kernel=""
+          for dir in /lib/modules/*; do
+            if [ -e "$dir/build" ]; then
+              kernel="$(basename "$dir")"
+            fi
+          done
+          test -n "$kernel"
+          echo "mhvtl $version for headers $kernel"
+          dkms add -m mhvtl -v "$version"
+          if ! dkms build -m mhvtl -v "$version" -k "$kernel"; then
+            cat "/var/lib/dkms/mhvtl/$version/build/make.log" || true
+            exit 1
+          fi
+          find "/var/lib/dkms/mhvtl/$version" -name 'mhvtl.ko*' | grep .
+
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ui
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26.2.0'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - name: Browser regressions with simulated APIs
+        run: |
+          python3 -m http.server 3000 --bind 127.0.0.1 --directory out > /tmp/vaultcenter-ui.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://localhost:3000/ >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://localhost:3000/ >/dev/null
+          result=0
+          for suite in dashboard media media-telemetry media-throughput media-throughput-aggregate dev-demo maintenance account app-version restoration vtls vtl-s3 vtl-selector modals notifications tape-storage cartridge-create cartridge-delete cartridge-windows client-binding fleet storage-recovery storage-actions pbs-connection bandwidth media-power cartridge-activity i18n storage-history activity-bell bucket-problems media-s3-shelf media-s3-flows header-storage; do
+            npm run "test:$suite" || result=1
+          done
+          exit "$result"
+
+  image:
+    # A module that no longer compiles must not be published either.
+    needs: [backend, ui, dkms]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Check the release version
+        id: release
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          tag=''
+          if [ "$IS_TAG" = 'true' ]; then tag=$REF_NAME; fi
+          version=$(bash deploy/tests/check_release_version.sh ${tag:+"$tag"})
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/adminsyspro/vaultcenter
+          flavor: latest=false
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+      - name: Build the appliance
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: vaultcenter:ci
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Test delivered API without host privileges
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          REVISION: ${{ github.sha }}
+        run: bash deploy/docker/smoke.sh vaultcenter:ci "$RELEASE_VERSION" "$REVISION"
+      # The package is public: only a release tag publishes. A push to main is
+      # built and tested like a pull request, and publishes nothing. Only the
+      # repository whose PUBLISH_IMAGE variable is 'true' publishes, so a public
+      # mirror of the code never pushes to the package.
+      - name: Sign in to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_IMAGE == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested local image
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_IMAGE == 'true'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            docker tag vaultcenter:ci "$tag"
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"
+          echo 'Published the tested image. Kernel/SCSI/PBS acceptance is a separate deployment gate.' >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,32 @@
+[package]
+name = "cold-vtl-api"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "cold-vtld"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+axum.workspace = true
+cold-vtl-core = { path = "../cold-vtl-core" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+hex.workspace = true
+argon2 = { version = "0.6.0", features = ["getrandom"] }
+openidconnect = { version = "4.0.1", default-features = false }
+base64 = "0.22.1"
+url = "2.5.8"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

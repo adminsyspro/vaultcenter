@@ -1,0 +1,11 @@
+# Use only after the host mount controller has prepared this rshared root.
+# Compose merges this with compose.yaml and compose.storage.yaml.
+services:
+  appliance:
+    volumes:
+      - type: bind
+        source: /var/lib/vaultcenter-mounts
+        target: /var/lib/vaultcenter-media
+        bind:
+          create_host_path: false
+          propagation: rslave

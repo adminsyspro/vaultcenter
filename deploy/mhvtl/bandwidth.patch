@@ -1,0 +1,171 @@
+diff --git a/include/vaultcenter_bandwidth.h b/include/vaultcenter_bandwidth.h
+new file mode 100644
+index 0000000..2c97356
+--- /dev/null
++++ b/include/vaultcenter_bandwidth.h
+@@ -0,0 +1,102 @@
++/* VaultCenter per-drive payload pacing. GPL-2.0-or-later, like mhVTL.
++ * Single-threaded tape daemon only; never blocks shared tgtd.
++ */
++#ifndef VAULTCENTER_BANDWIDTH_H
++#define VAULTCENTER_BANDWIDTH_H
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <inttypes.h>
++#include <time.h>
++#include <errno.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <sys/stat.h>
++
++static struct {
++    const char *path, *id;
++    uint64_t revision, rate, checked_ns, started_ns;
++    int error, initialized;
++} vaultcenter_bw;
++
++#ifndef VAULTCENTER_BW_NOW
++static inline uint64_t vaultcenter_bw_now(void) {
++    struct timespec ts;
++    if (clock_gettime(CLOCK_MONOTONIC, &ts)) return UINT64_MAX;
++    return (uint64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
++}
++#define VAULTCENTER_BW_NOW vaultcenter_bw_now
++#endif
++#ifndef VAULTCENTER_BW_SLEEP
++static inline int vaultcenter_bw_sleep(uint64_t ns) {
++    struct timespec ts = { .tv_sec = 0, .tv_nsec = (long)ns };
++    return nanosleep(&ts, NULL) && errno != EINTR ? -1 : 0;
++}
++#define VAULTCENTER_BW_SLEEP vaultcenter_bw_sleep
++#endif
++
++static inline int vaultcenter_bw_reload(void) {
++    char text[200], magic[16], id[40], extra;
++    uint64_t revision, rate;
++    struct stat st;
++    uint64_t now = VAULTCENTER_BW_NOW();
++    if (!vaultcenter_bw.path) return 0; /* legacy, not managed by an isolated VTL */
++    if (now == UINT64_MAX) return -1;
++    if (vaultcenter_bw.initialized && now >= vaultcenter_bw.checked_ns && now - vaultcenter_bw.checked_ns < 1000000000)
++        return vaultcenter_bw.error ? -1 : 0;
++    vaultcenter_bw.checked_ns = now;
++    int fd = open(vaultcenter_bw.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
++    if (fd < 0) { vaultcenter_bw.error=1; return -1; }
++    int bad = fstat(fd,&st) || !S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 0022) || st.st_size >= (off_t)sizeof(text);
++    ssize_t n = bad ? -1 : read(fd,text,sizeof(text)-1);
++    close(fd);
++    if (n <= 0) { vaultcenter_bw.error=1; return -1; }
++    text[n]=0;
++    if (sscanf(text,"%15s %39s %" SCNu64 " %" SCNu64 " %c",magic,id,&revision,&rate,&extra) != 4
++            || strcmp(magic,"VAULTCENTER_BW1") || strcmp(id,vaultcenter_bw.id)
++            || !revision || revision >= (UINT64_C(1)<<63)
++            || revision < vaultcenter_bw.revision
++            || (revision == vaultcenter_bw.revision && vaultcenter_bw.initialized && rate != vaultcenter_bw.rate)
++            || (rate && (rate < 1000000 || rate > UINT64_C(100000000000) || rate % 1000000))) {
++        vaultcenter_bw.error=1; return -1;
++    }
++    vaultcenter_bw.revision=revision; vaultcenter_bw.rate=rate;
++    vaultcenter_bw.initialized=1; vaultcenter_bw.error=0;
++    return 0;
++}
++
++static inline int vaultcenter_bw_init(const char *path, const char *id) {
++    memset(&vaultcenter_bw,0,sizeof(vaultcenter_bw));
++    if (!path && !id) return 0;
++    if (!path || !id || strlen(id)!=36 || strspn(id,"0123456789abcdef-")!=36) return -1;
++    vaultcenter_bw.path=path; vaultcenter_bw.id=id;
++    return vaultcenter_bw_reload();
++}
++
++static inline void vaultcenter_bw_begin(void) {
++    (void)vaultcenter_bw_reload();
++    vaultcenter_bw.started_ns=VAULTCENTER_BW_NOW();
++}
++
++static inline int vaultcenter_bw_wait(uint64_t bytes) {
++    if (!bytes || !vaultcenter_bw.rate) return 0;
++    /* Count successful bytes before acknowledging the command. Time spent
++     * writing counts, idle time before the command does not earn credit. */
++    __uint128_t remaining=(__uint128_t)bytes*1000000000;
++    uint64_t previous=vaultcenter_bw.started_ns;
++    while (remaining) {
++        uint64_t now=VAULTCENTER_BW_NOW();
++        if (now==UINT64_MAX || previous==UINT64_MAX || now<previous) return -1;
++        __uint128_t earned=(__uint128_t)(now-previous)*vaultcenter_bw.rate;
++        if (earned >= remaining) return 0;
++        remaining-=earned; previous=now;
++        (void)vaultcenter_bw_reload(); /* malformed updates retain the last valid rate */
++        if (!vaultcenter_bw.rate) return 0;
++        __uint128_t ns=(remaining+vaultcenter_bw.rate-1)/vaultcenter_bw.rate;
++        uint64_t delay=ns>100000000 ? 100000000 : (uint64_t)ns;
++        if (VAULTCENTER_BW_SLEEP(delay)) return -1;
++    }
++    return 0;
++}
++#endif
+diff --git a/include/vaultcenter_telemetry.h b/include/vaultcenter_telemetry.h
+index 77e1056..89e63ad 100644
+--- a/include/vaultcenter_telemetry.h
++++ b/include/vaultcenter_telemetry.h
+@@ -4,6 +4,7 @@
+  */
+ #ifndef VAULTCENTER_TELEMETRY_H
+ #define VAULTCENTER_TELEMETRY_H
++#include "vaultcenter_bandwidth.h"
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <inttypes.h>
+@@ -47,8 +48,11 @@ static void vaultcenter_status_at(FILE *fifo, int queue, const char *state,
+     length = snprintf(record, sizeof(record),
+         "{\"vaultcenter\":1,\"queue\":%d,\"pid\":%ld,\"at_ms\":%" PRIu64
+         ",\"mono_ms\":%" PRIu64 ",\"generation\":%" PRIu64
+-        ",\"bytes_written\":%" PRIu64 ",\"barcode\":%s,\"state\":\"%s\"}\n",
+-        queue, (long)getpid(), at_ms, mono_ms, generation, written, label, state);
++        ",\"bytes_written\":%" PRIu64 ",\"barcode\":%s,\"state\":\"%s\""
++        ",\"bandwidth_revision\":%" PRIu64 ",\"tape_write_limit_bps\":%" PRIu64
++        ",\"bandwidth_error\":%s}\n",
++        queue, (long)getpid(), at_ms, mono_ms, generation, written, label, state,
++        vaultcenter_bw.revision, vaultcenter_bw.rate, vaultcenter_bw.error ? "true" : "false");
+     if (length > 0 && (size_t)length < sizeof(record)) {
+         ssize_t result = write(fileno(fifo), record, (size_t)length);
+         (void)result;
+diff --git a/usr/cmd/vtltape.c b/usr/cmd/vtltape.c
+index 148d358..cd346d7 100644
+--- a/usr/cmd/vtltape.c
++++ b/usr/cmd/vtltape.c
+@@ -2259,7 +2259,13 @@ static void process_cmd(int cdev, uint8_t *buf, struct mhvtl_header *mhvtl_cmd,
+ 	dbuf.sam_stat  = lu_ssc.sam_status;
+ 	dbuf.sense_buf = &sense;
+ 
++	uint64_t vaultcenter_before = lu_ssc.vaultcenter_written;
++	vaultcenter_bw_begin();
+ 	processCommand(cdev, cdb, &dbuf, pollInterval);
++	if (vaultcenter_bw_wait(lu_ssc.vaultcenter_written - vaultcenter_before)) {
++		MHVTL_ERR("VaultCenter bandwidth clock/wait failed; command not acknowledged");
++		exit(1);
++	}
+ 
+ 	/* Complete SCSI cmd processing */
+ 	completeSCSICommand(cdev, &dbuf);
+@@ -2391,6 +2397,10 @@ int main(int argc, char *argv[]) {
+ 	memset(&mhvtl_cmd, 0, sizeof(struct mhvtl_header));
+ 	memset(&ctl, 0, sizeof(struct mhvtl_ctl));
+ 
++	if (vaultcenter_bw_init(getenv("VAULTCENTER_BANDWIDTH_CONFIG"), getenv("VAULTCENTER_VTL_ID"))) {
++		MHVTL_ERR("Invalid VaultCenter bandwidth settings; drive startup refused");
++		return 1;
++	}
+ 	current_state = MHVTL_STATE_INIT;
+ 
+ 	while ((opt = getopt(argc, argv, "dv::q:f::F")) != -1) {
+@@ -2656,6 +2666,7 @@ int main(int argc, char *argv[]) {
+ 				sleep(1);
+ 				break;
+ 			}
++            (void)vaultcenter_bw_reload();
+             if (lunit.fifo_fd) {
+                 struct timespec wall, mono;
+                 if (!clock_gettime(CLOCK_REALTIME, &wall) &&

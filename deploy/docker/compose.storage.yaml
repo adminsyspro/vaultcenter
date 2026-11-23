@@ -1,0 +1,17 @@
+# Optional host-managed storage. Initialise the persistent storage-managed marker
+# before starting this profile. Keep this file in the controller's base Compose.
+services:
+  appliance:
+    volumes:
+      - type: bind
+        source: /run/vaultcenter-host
+        target: /run/vaultcenter-host
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config/storage-socket.conf
+        target: /etc/systemd/system/cold-vtld.service.d/storage-socket.conf
+        read_only: true
+        bind:
+          create_host_path: false

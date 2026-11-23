@@ -1,0 +1,84 @@
+diff --git a/include/vaultcenter_slot_map.h b/include/vaultcenter_slot_map.h
+new file mode 100644
+index 0000000..3608213
+--- /dev/null
++++ b/include/vaultcenter_slot_map.h
+@@ -0,0 +1,58 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later
++ * Publishes the library's storage and import/export slots on the status FIFO,
++ * on every change and at least every 5 s, so an observer can place cartridges
++ * without sending SCSI commands to the changer. Each record is one nonblocking
++ * write below PIPE_BUF; larger maps are split into parts sharing a sequence.
++ * Included after vaultcenter_library.h; only called from the library loop.
++ */
++#ifndef VAULTCENTER_SLOT_MAP_H
++#define VAULTCENTER_SLOT_MAP_H
++#include <time.h>
++#define FSM_PER_RECORD 96 /* 96 * 30 bytes + header stays below 4096 */
++
++static int fsm_barcode_ok(const char *barcode) {
++ size_t n=strlen(barcode);
++ return n<=32&&strspn(barcode,"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")==n;
++}
++
++static void vaultcenter_slot_map(FILE *fifo, long queue) {
++ static uint64_t last_ms, sequence;
++ static uint32_t last_sum;
++ struct fm_slot slots[FM_MAX_SLOTS];
++ struct s_info *refs[FM_MAX_SLOTS];
++ struct timespec wall, mono;
++ char record[4096];
++ if(!fifo||clock_gettime(CLOCK_REALTIME,&wall)||clock_gettime(CLOCK_MONOTONIC,&mono))return;
++ uint64_t at_ms=(uint64_t)wall.tv_sec*1000+wall.tv_nsec/1000000;
++ uint64_t mono_ms=(uint64_t)mono.tv_sec*1000+mono.tv_nsec/1000000;
++ int n=vaultcenter_snapshot(slots,refs);
++ if(n<0)return;
++ uint32_t sum=2166136261u;
++ int total=0;
++ for(int i=0;i<n;i++) {
++  if(slots[i].kind!=STORAGE_ELEMENT&&slots[i].kind!=MAP_ELEMENT)continue;
++  if(!fsm_barcode_ok(slots[i].barcode))return;
++  unsigned values[2]={slots[i].kind,slots[i].address};
++  for(int v=0;v<2;v++)for(int b=0;b<4;b++)sum=(sum^((values[v]>>(8*b))&0xffu))*16777619u;
++  for(const char *c=slots[i].barcode;*c;c++)sum=(sum^(unsigned char)*c)*16777619u;
++  sum=(sum^0xffu)*16777619u;
++  total++;
++ }
++ if(last_ms&&sum==last_sum&&mono_ms-last_ms<5000)return;
++ last_sum=sum;last_ms=mono_ms;sequence++;
++ int parts=total?(total+FSM_PER_RECORD-1)/FSM_PER_RECORD:1, cursor=0;
++ for(int part=0;part<parts;part++) {
++  int length=snprintf(record,sizeof(record),"{\"vaultcenter\":1,\"queue\":%ld,\"pid\":%ld,\"at_ms\":%" PRIu64
++   ",\"slot_map\":%" PRIu64 ",\"part\":%d,\"parts\":%d,\"slots\":[",queue,(long)getpid(),at_ms,sequence,part,parts);
++  for(int count=0;cursor<n&&count<FSM_PER_RECORD;cursor++) {
++   if(slots[cursor].kind!=STORAGE_ELEMENT&&slots[cursor].kind!=MAP_ELEMENT)continue;
++   const char *barcode=slots[cursor].barcode;
++   length+=snprintf(record+length,sizeof(record)-length,"%s[%u,%u,%s%s%s]",count?",":"",
++    slots[cursor].kind==MAP_ELEMENT?3u:2u,slots[cursor].address,*barcode?"\"":"",*barcode?barcode:"null",*barcode?"\"":"");
++   count++;
++  }
++  length+=snprintf(record+length,sizeof(record)-length,"]}\n");
++  if(length>0&&(size_t)length<sizeof(record)) {ssize_t r=write(fileno(fifo),record,(size_t)length);(void)r;}
++ }
++}
++#endif
+diff --git a/usr/cmd/vtllibrary.c b/usr/cmd/vtllibrary.c
+index 3964e69..bdca670 100644
+--- a/usr/cmd/vtllibrary.c
++++ b/usr/cmd/vtllibrary.c
+@@ -330,6 +330,7 @@ static struct m_info *add_barcode(struct lu_phy_attr *lu, char *barcode) {
+ }
+ 
+ #include "vaultcenter_library.h"
++#include "vaultcenter_slot_map.h"
+ 
+ /* Return zero - failed, non-zero - success */
+ static int load_map(struct q_msg *msg) {
+@@ -1889,6 +1890,7 @@ int main(int argc, char *argv[]) {
+ 							  &smc_slots.state_msg);
+ 				last_state = current_state;
+ 			}
++			vaultcenter_slot_map(lunit.fifo_fd, my_id);
+ 			if (pollInterval > 0xf000) /* enough time to ensure no outstanding op in flight */
+ 				if (time_to_exit)
+ 					goto exit;

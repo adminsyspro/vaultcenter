@@ -1,0 +1,12 @@
+{
+  "isolated": true,
+  "compose_file": "/etc/vaultcenter-host/compose.json",
+  "project": "vaultcenter",
+  "container": "vaultcenter-appliance-1",
+  "state_dir": "/var/lib/docker/volumes/vaultcenter_state/_data",
+  "host_state": "/var/lib/vaultcenter-host",
+  "mount_root": "/var/lib/vaultcenter-mounts",
+  "socket": "/run/vaultcenter-host/storage.sock",
+  "initial_media": {},
+  "forbidden": ["/opt/vaultcenter", "/etc/vaultcenter-host"]
+}

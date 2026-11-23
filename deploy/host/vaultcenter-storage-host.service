@@ -1,0 +1,18 @@
+[Unit]
+Description=VaultCenter host tape storage controller
+Before=docker.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 /usr/local/libexec/vaultcenter-host/storage_controller.py
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=vaultcenter-host
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=vaultcenter-host
+StateDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+{
+  "drive_path": "/dev/tape/by-id/scsi-COLDVTL011-sg",
+  "changer": "cold-vtl",
+  "tape_config_sha256": "REPLACE_WITH_SHA256_OF_VERIFIED_TAPE_CFG"
+}

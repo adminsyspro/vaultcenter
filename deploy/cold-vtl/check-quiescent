@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+# Lab adapter: the control plane stays online while the SCSI data plane is stopped.
+# Fail closed if units are missing, failed, starting, stopping or still active.
+for unit in tgt.service vtltape@11.service vtllibrary@10.service; do
+    [ "$(systemctl show --property=LoadState --value "$unit")" = loaded ] || exit 1
+    [ "$(systemctl show --property=ActiveState --value "$unit")" = inactive ] || exit 1
+done
+if pgrep -x vtltape >/dev/null || pgrep -x vtllibrary >/dev/null; then
+    exit 1
+fi

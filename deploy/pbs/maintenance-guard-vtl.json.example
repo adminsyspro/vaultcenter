@@ -1,0 +1,14 @@
+{
+  "vtl_id": "00000000-0000-4000-8000-000000000021",
+  "changer": "vaultcenter-a",
+  "changer_path": "/dev/tape/by-id/scsi-REPLACE_CHANGER_SERIAL",
+  "changer_serial": "REPLACE_CHANGER_SERIAL",
+  "drives": [
+    {
+      "name": "vaultcenter-a-drive",
+      "path": "/dev/tape/by-id/scsi-REPLACE_DRIVE_SERIAL-sg",
+      "serial": "REPLACE_DRIVE_SERIAL",
+      "changer-drivenum": 0
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[Unit]
+Description=VaultCenter read-only tape telemetry
+ConditionPathExists=/etc/cold-vtl/telemetry.json
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/vaultcenter-telemetry --config /etc/cold-vtl/telemetry.json
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=vaultcenter/telemetry
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/vaultcenter/telemetry
+
+[Install]
+WantedBy=multi-user.target

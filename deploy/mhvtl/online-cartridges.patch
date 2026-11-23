@@ -1,0 +1,345 @@
+diff --git a/include/vaultcenter_media.h b/include/vaultcenter_media.h
+new file mode 100644
+--- /dev/null
++++ b/include/vaultcenter_media.h
+@@ -0,0 +1,124 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later
++ * Append-only insertion intents. Independent of mhVTL's shutdown inventory:
++ * loading this ledger must precede exposing the library's SCSI transport.
++ */
++#ifndef VAULTCENTER_MEDIA_H
++#define VAULTCENTER_MEDIA_H
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#ifndef FM_FSYNC
++#define FM_FSYNC fsync
++#endif
++#define FM_MAX_OPS 4096
++#define FM_MAX_SLOTS 256
++#define FM_ALREADY (-2)
++struct fm_op { char id[37], barcode[17]; };
++struct fm_ledger { size_t count; struct fm_op ops[FM_MAX_OPS]; };
++/* kind: 2 storage, 4 drive; addresses and origin are absolute SMC addresses. */
++struct fm_slot { unsigned kind, address, origin; char barcode[17]; };
++static inline int fm_valid_operation(const char *s) {
++ if (strlen(s)!=36) return 0;
++ for (int i=0;i<36;i++) {
++  if (i==8||i==13||i==18||i==23) { if (s[i]!='-') return 0; }
++  else if (!((s[i]>='0'&&s[i]<='9')||(s[i]>='a'&&s[i]<='f'))) return 0;
++ }
++ return 1;
++}
++static inline int fm_valid_barcode(const char *s) {
++ size_t n=strlen(s); if(n<6||n>16)return 0;
++ for(size_t i=0;i<n;i++)if(!((s[i]>='A'&&s[i]<='Z')||(s[i]>='0'&&s[i]<='9')||s[i]=='-'))return 0;
++ return 1;
++}
++static inline int fm_find(const struct fm_slot *slots,size_t n,const char *barcode) {
++ for(size_t i=0;i<n;i++)if(!strcmp(slots[i].barcode,barcode))return (int)i;
++ return -1;
++}
++static inline int fm_reserved(const struct fm_slot *slots,size_t n,size_t index) {
++ for(size_t i=0;i<n;i++)if(slots[i].kind==4&&slots[i].barcode[0]&&slots[i].origin==slots[index].address)return 1;
++ return 0;
++}
++/* A loaded medium with no unambiguous return location needs investigation,
++ * not consumption of another empty slot by an administrative insertion. */
++static inline int fm_known_origins(const struct fm_slot *slots,size_t n) {
++ for(size_t i=0;i<n;i++)if(slots[i].kind==4&&slots[i].barcode[0]) {
++  int found=0;
++  for(size_t j=0;j<n;j++)if(slots[j].address==slots[i].origin&&
++      (slots[j].kind==2||slots[j].kind==3)&&!slots[j].barcode[0])found++;
++  if(found!=1)return 0;
++  for(size_t j=0;j<i;j++)if(slots[j].kind==4&&slots[j].barcode[0]&&slots[j].origin==slots[i].origin)return 0;
++ }
++ return 1;
++}
++static inline int fm_free_slot(const struct fm_slot *slots,size_t n) {
++ if(!fm_known_origins(slots,n))return -1;
++ for(size_t i=0;i<n;i++)if(slots[i].kind==2&&!slots[i].barcode[0]&&!fm_reserved(slots,n,i))return (int)i;
++ return -1;
++}
++static inline unsigned fm_free_count(const struct fm_slot *slots,size_t n) {
++ unsigned count=0;
++ if(!fm_known_origins(slots,n))return 0;
++ for(size_t i=0;i<n;i++)if(slots[i].kind==2&&!slots[i].barcode[0]&&!fm_reserved(slots,n,i))count++;
++ return count;
++}
++static inline int fm_prepare(const struct fm_ledger *l,const char *op,const char *barcode,const struct fm_slot *slots,size_t n) {
++ if(!fm_valid_operation(op)||!fm_valid_barcode(barcode))return -1;
++ for(size_t i=0;i<l->count;i++) {
++  if(!strcmp(l->ops[i].id,op))return !strcmp(l->ops[i].barcode,barcode)&&fm_find(slots,n,barcode)>=0?FM_ALREADY:-1;
++  if(!strcmp(l->ops[i].barcode,barcode))return -1;
++ }
++ if(l->count==FM_MAX_OPS||fm_find(slots,n,barcode)>=0)return -1;
++ return fm_free_slot(slots,n);
++}
++static inline int fm_add(struct fm_ledger *l,const char *op,const char *barcode) {
++ if(l->count>=FM_MAX_OPS||!fm_valid_operation(op)||!fm_valid_barcode(barcode))return -1;
++ for(size_t i=0;i<l->count;i++)if(!strcmp(l->ops[i].id,op)||!strcmp(l->ops[i].barcode,barcode))return -1;
++ strcpy(l->ops[l->count].id,op);strcpy(l->ops[l->count].barcode,barcode);l->count++;return 0;
++}
++static inline int fm_load(const char *path,long library,struct fm_ledger *l) {
++ int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
++ l->count=0;
++ if(fd<0)return errno==ENOENT?0:-1;
++ struct stat st;
++ if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_nlink!=1||st.st_size>FM_MAX_OPS*56+64){close(fd);return -1;}
++ FILE *f=fdopen(fd,"r");if(!f){close(fd);return -1;}
++ char line[96],expected[64];int result=-1;
++ snprintf(expected,sizeof(expected),"VAULTCENTER_MEDIA1 %ld\n",library);
++ if(!fgets(line,sizeof(line),f)||strcmp(line,expected))goto done;
++ while(fgets(line,sizeof(line),f)) {
++  char op[37],barcode[17],extra;
++  if(!strchr(line,'\n')||sscanf(line,"%36s %16s %c",op,barcode,&extra)!=2||fm_add(l,op,barcode))goto done;
++ }
++ if(!ferror(f))result=0;
++ done: fclose(f);return result;
++}
++static inline int fm_store(const char *path,long library,const struct fm_ledger *l) {
++ char dir[4096],tmp[4096];const char *slash=strrchr(path,'/');
++ if(!slash||slash==path||strlen(path)>4000)return -1;
++ size_t len=(size_t)(slash-path);memcpy(dir,path,len);dir[len]=0;
++ int dfd=open(dir,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);if(dfd<0)return -1;
++ int fd=-1;
++ /* Never trust or overwrite an orphan. PID reuse after a container restart
++  * is common; choose another exclusive name instead of poisoning recovery. */
++ for(unsigned attempt=0;attempt<4096;attempt++) {
++  snprintf(tmp,sizeof(tmp),"%s.tmp.%ld.%u",slash+1,(long)getpid(),attempt);
++  fd=openat(dfd,tmp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
++  if(fd>=0||errno!=EEXIST)break;
++ }
++ if(fd<0){close(dfd);return -1;}
++ FILE *f=fdopen(fd,"w");int result=-1;
++ if(!f){close(fd);goto done;}
++ if(fprintf(f,"VAULTCENTER_MEDIA1 %ld\n",library)<0)goto close_file;
++ for(size_t i=0;i<l->count;i++)if(fprintf(f,"%s %s\n",l->ops[i].id,l->ops[i].barcode)<0)goto close_file;
++ if(fflush(f)||FM_FSYNC(fd))goto close_file;
++ if(fclose(f)){f=NULL;goto done;}f=NULL;
++ if(renameat(dfd,tmp,dfd,slash+1)||FM_FSYNC(dfd))goto done;
++ result=0;
++ close_file: if(f)fclose(f);
++ done: unlinkat(dfd,tmp,0);close(dfd);return result;
++}
++#endif
+diff --git a/include/vaultcenter_library.h b/include/vaultcenter_library.h
+new file mode 100644
+--- /dev/null
++++ b/include/vaultcenter_library.h
+@@ -0,0 +1,89 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later
++ * Included after mhVTL's barcode helpers. Only called on the library loop.
++ */
++#include "vaultcenter_media.h"
++static struct fm_ledger vaultcenter_ledger;
++static int vaultcenter_media_fault;
++static char vaultcenter_media_path[4096];
++static int vaultcenter_snapshot(struct fm_slot *slots,struct s_info **refs) {
++ struct s_info *sp;size_t n=0;
++ list_for_each_entry(sp,&smc_slots.slot_list,siblings) {
++  if(n==FM_MAX_SLOTS)return -1;
++  refs[n]=sp;slots[n].kind=sp->element_type;slots[n].address=sp->slot_location;
++  slots[n].origin=sp->last_location;slots[n].barcode[0]=0;
++  if(slotOccupied(sp)) {
++   if(!sp->media)return -1;
++   snprintf(slots[n].barcode,sizeof(slots[n].barcode),"%.16s",sp->media->barcode);
++   size_t length=strlen(slots[n].barcode);
++   while(length&&slots[n].barcode[length-1]==' ')slots[n].barcode[--length]=0;
++  }
++  n++;
++ }
++ return (int)n;
++}
++static int vaultcenter_media_exists(const char *barcode, int blank) {
++ const char *names[]={"mam","mhvtl_data","data.0","indx.0","meta.0"};
++ int root=open(home_directory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);if(root<0)return 0;
++ int dir=openat(root,barcode,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);close(root);if(dir<0)return 0;
++ int good=1;struct stat st;
++ for(size_t i=0;i<sizeof(names)/sizeof(names[0]);i++)
++  if(fstatat(dir,names[i],&st,AT_SYMLINK_NOFOLLOW)||!S_ISREG(st.st_mode)||st.st_nlink!=1
++     ||(blank&&(i==2||i==3)&&st.st_size!=0))good=0;
++ close(dir);return good;
++}
++static void vaultcenter_publish(struct s_info *slot,const char *barcode) {
++ struct m_info *media=lookup_barcode(&lunit,(char *)barcode);
++ if(!media)media=add_barcode(&lunit,(char *)barcode);
++ slot->media=media;slot->status|=STATUS_Full|STATUS_Access;
++}
++/* Receipt replay is append-only. Existing slots and loaded media win over the
++ * receipt's old location; only missing newly-created barcodes are inserted. */
++static int vaultcenter_media_recover(void) {
++ if(snprintf(vaultcenter_media_path,sizeof(vaultcenter_media_path),"%s/.vaultcenter-media-%ld",home_directory,my_id)>=(int)sizeof(vaultcenter_media_path))return -1;
++ if(fm_load(vaultcenter_media_path,my_id,&vaultcenter_ledger))return -1;
++ for(size_t i=0;i<vaultcenter_ledger.count;i++) {
++  struct fm_slot slots[FM_MAX_SLOTS];struct s_info *refs[FM_MAX_SLOTS];
++  int n=vaultcenter_snapshot(slots,refs);if(n<0)return -1;
++  const char *barcode=vaultcenter_ledger.ops[i].barcode;
++  if(!vaultcenter_media_exists(barcode,0))return -1;
++  if(fm_find(slots,(size_t)n,barcode)>=0)continue;
++  int free_slot=fm_free_slot(slots,(size_t)n);if(free_slot<0)return -1;
++  vaultcenter_publish(refs[free_slot],barcode);
++ }
++ vaultcenter_media_fault=0;return 0;
++}
++static void vaultcenter_media_command(struct q_msg *msg) {
++ char action[16]={0},op[37]={0},barcode[17]={0},extra;
++ char response[512];const char *error=NULL,*result="inserted";
++ struct fm_slot slots[FM_MAX_SLOTS];struct s_info *refs[FM_MAX_SLOTS];
++ int count=sscanf(msg->text,"vaultcenter-media %15s %36s %16s %c",action,op,barcode,&extra);
++ int n=vaultcenter_snapshot(slots,refs);
++ if(!((count==2&&!strcmp(action,"status"))||(count==3&&!strcmp(action,"insert")))||!fm_valid_operation(op)) {
++  /* Invalid request fields must never be reflected into JSON. */
++  strcpy(op,"00000000-0000-0000-0000-000000000000");barcode[0]=0;error="invalid_request";
++ } else if(vaultcenter_media_fault||n<0||!lunit.online)error="unavailable";
++ else if(!strcmp(action,"insert")) {
++  if(!fm_valid_barcode(barcode)){barcode[0]=0;error="invalid_barcode";}
++  else {
++   int slot=fm_prepare(&vaultcenter_ledger,op,barcode,slots,(size_t)n);
++   if(slot==FM_ALREADY)result="already_inserted";
++   else if(slot<0)error="conflict_or_full";
++   else if(!vaultcenter_media_exists(barcode,1))error="media_missing_or_not_blank";
++   else {
++    /* Once intent is durable, it is never undone. If acknowledgement fails,
++     * restart replays it; a retry must not require a still-blank cartridge. */
++    if(fm_add(&vaultcenter_ledger,op,barcode)||fm_store(vaultcenter_media_path,my_id,&vaultcenter_ledger)) {
++     vaultcenter_media_fault=1;error="persistence_failed";
++    } else vaultcenter_publish(refs[slot],barcode);
++   }
++  }
++ }
++ if(error)snprintf(response,sizeof(response),"{\"version\":1,\"library_id\":%ld,\"operation_id\":\"%s\",\"error\":\"%s\"}",my_id,op,error);
++ else if(!strcmp(action,"status"))snprintf(response,sizeof(response),"{\"version\":1,\"library_id\":%ld,\"operation_id\":\"%s\",\"free_slots\":%u}",my_id,op,fm_free_count(slots,(size_t)n));
++ else snprintf(response,sizeof(response),"{\"version\":1,\"library_id\":%ld,\"operation_id\":\"%s\",\"barcode\":\"%s\",\"result\":\"%s\"}",my_id,op,barcode,result);
++ /* Private per-process response queue, nonblocking if a timed-out client left. */
++ struct q_entry reply;memset(&reply,0,sizeof(reply));reply.rcv_id=msg->snd_id;reply.msg.snd_id=my_id;
++ snprintf(reply.msg.text,sizeof(reply.msg.text),"%s",response);
++ int queue=msgget(QKEY,QPERM);
++ if(queue>=0&&reply.rcv_id>VTLCMD_Q)msgsnd(queue,&reply,sizeof(reply.msg.snd_id)+strlen(reply.msg.text)+1,IPC_NOWAIT);
++}
+diff --git a/usr/cmd/vtllibrary.c b/usr/cmd/vtllibrary.c
+--- a/usr/cmd/vtllibrary.c
++++ b/usr/cmd/vtllibrary.c
+@@ -329,6 +329,8 @@
+ 	return m;
+ }
+ 
++#include "vaultcenter_library.h"
++
+ /* Return zero - failed, non-zero - success */
+ static int load_map(struct q_msg *msg) {
+ 	struct s_info *sp = NULL;
+@@ -499,7 +501,11 @@
+ 
+ 	MHVTL_DBG(1, "%ld: Received from sender id: %ld, msg : %s", my_id, msg->snd_id, msg->text);
+ 
+-	if (!strncmp(msg->text, "debug", 5)) {
++	if (!strncmp(msg->text, "vaultcenter-media ", sizeof("vaultcenter-media ") - 1)) {
++        vaultcenter_media_command(msg);
++        return 0;
++    }
++    if (!strncmp(msg->text, "debug", 5)) {
+ 		if (debug) {
+ 			debug--;
+ 		} else {
+@@ -1515,6 +1521,10 @@
+ 	customise_lu(&lunit);
+ 
+ 	update_drive_details(&lunit);
++    if (vaultcenter_media_recover()) {
++        MHVTL_ERR("VaultCenter media ledger recovery failed; refusing to expose library");
++        exit(1);
++    }
+ 
+ 	/* malloc a big enough buffer to fit worst case read element status */
+ 	buffer_size = (smc_slots.num_drives +
+@@ -1649,6 +1659,10 @@
+ 	customise_lu(&lunit);
+ 
+ 	update_drive_details(&lunit);
++    if (vaultcenter_media_recover()) {
++        MHVTL_ERR("VaultCenter media ledger recovery failed; refusing to expose library");
++        exit(1);
++    }
+ 
+ 	lunit.online = 1; /* Mark unit online */
+ 
+diff --git a/usr/cmd/vtlcmd.c b/usr/cmd/vtlcmd.c
+--- a/usr/cmd/vtlcmd.c
++++ b/usr/cmd/vtlcmd.c
+@@ -305,6 +305,11 @@
+ 			}
+ 
+ 			/* Library commands */
++            if (!strcmp(argv[2], "vaultcenter-media")) {
++                if ((argc==5 && !strcmp(argv[3],"status")) ||
++                    (argc==6 && !strcmp(argv[3],"insert"))) return NULL;
++                return "vaultcenter-media";
++            }
+ 			if (!strcmp(argv[2], "add")) {
+ 				if (argc == 4)
+ 					return NULL;
+@@ -342,7 +347,8 @@
+  */
+ const char *Check_DeviceCommand(const char *buf, int device_type) {
+ 	if (device_type == TYPE_LIBRARY) {
+-		if (!strncmp(buf, "online", 6)) {
++		if (!strncmp(buf, "vaultcenter-media ", sizeof("vaultcenter-media ") - 1)) {
++        } else if (!strncmp(buf, "online", 6)) {
+ 		} else if (!strncmp(buf, "add slot", 8)) {
+ 		} else if (!strncmp(buf, "offline", 7)) {
+ 		} else if (!strncmp(buf, "open map", 8)) {
+@@ -402,7 +408,7 @@
+ 	struct q_entry s_entry;
+ 
+ 	s_entry.rcv_id		= ReceiverMtyp;
+-	s_entry.msg.snd_id	= VTLCMD_Q;
++	s_entry.msg.snd_id	= my_id;
+ 	s_entry.msg.text[0] = '\0';
+ 	strncat(s_entry.msg.text, sndbuf, MAXTEXTLEN);
+ 
+@@ -527,7 +533,8 @@
+ 
+ 	/* check if command to the specific device is allowed */
+ 	if (device_type == TYPE_LIBRARY) {
+-		if (!strncmp(buf, "online", 6)) {
++		if (!strncmp(buf, "vaultcenter-media ", sizeof("vaultcenter-media ") - 1)) {
++        } else if (!strncmp(buf, "online", 6)) {
+ 		} else if (!strncmp(buf, "add slot", 8)) {
+ 		} else if (!strncmp(buf, "offline", 7)) {
+ 		} else if (!strncmp(buf, "open map", 8)) {
+@@ -573,13 +580,28 @@
+ 		exit(1);
+ 	}
+ 
+-	if (SendMsg(ReceiverQid, deviceNo, buf) < 0) {
++	if (!strcmp(argv[2], "vaultcenter-media")) my_id = VTLCMD_Q + (long)getpid();
++    if (SendMsg(ReceiverQid, deviceNo, buf) < 0) {
+ 		fprintf(stderr, "Message Queue Error: send message\n");
+ 		exit(1);
+ 	}
+ 
+ 	if (device_type == TYPE_LIBRARY) {
+-		if (!strcmp(argv[2], "add") && !strcmp(argv[3], "slot"))
++        if (!strcmp(argv[2], "vaultcenter-media")) {
++            struct q_entry response;
++            for (int attempt=0;attempt<500;attempt++) {
++                ssize_t size=msgrcv(ReceiverQid,&response,MAXOBN,my_id,IPC_NOWAIT);
++                if(size>0) {
++                    response.msg.text[MAXTEXTLEN]=0;
++                    if(response.msg.snd_id!=deviceNo)continue;
++                    printf("%s\n",response.msg.text);return 0;
++                }
++                if(errno!=ENOMSG && errno!=EINTR)return 1;
++                usleep(10000);
++            }
++            fprintf(stderr,"Library did not confirm vaultcenter-media command\n");return 1;
++        }
++        if (!strcmp(argv[2], "add") && !strcmp(argv[3], "slot"))
+ 			DisplayResponse(ReceiverQid, "");
+ 		if (!strcmp(argv[2], "open") && !strcmp(argv[3], "map"))
+ 			DisplayResponse(ReceiverQid, "");

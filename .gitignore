@@ -1,0 +1,17 @@
+/target/
+/.idea/
+/.vscode/
+*.log
+.env
+/ui/node_modules/
+/ui/.next/
+/ui/out/
+/ui/*.tsbuildinfo
+/ui/test-results/
+/.local/
+__pycache__/
+*.pyc
+/deploy/docker/config/
+
+/ui/.next-demo/
+/.impeccable/hook.cache.json

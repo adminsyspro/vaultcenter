@@ -1,0 +1,9 @@
+{
+  "pbs": "root@pbs.example.net",
+  "key_file": "/etc/cold-vtl/maintenance/id_ed25519",
+  "known_hosts": "/etc/cold-vtl/maintenance/known_hosts",
+  "media_root": "/opt/mhvtl",
+  "mhvtl_config": "/etc/mhvtl",
+  "restore_root": "/var/lib/cold-vtl/restores",
+  "database": "/var/lib/cold-vtl/catalog.db"
+}

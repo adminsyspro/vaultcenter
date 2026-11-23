@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Test double: records the call and answers from the sandbox scenario. The
+# interpreter is named by the sandbox, so that a test can take python3 off PATH.
+exec "${VAULTCENTER_SANDBOX_PYTHON:-python3}" "$(dirname "$(readlink -f "$0")")/_double.py" "$(basename "$0")" "$@"

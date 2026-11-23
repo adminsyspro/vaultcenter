@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore verified VaultCenter library mounts
+After=local-fs.target
+Before=docker.service vaultcenter-storage-host.service
+ConditionPathExists=/etc/vaultcenter-host/isolated-mode
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/vaultcenter-host/storage_controller.py --prepare-mounts
+RemainAfterExit=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

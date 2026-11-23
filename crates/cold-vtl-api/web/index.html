@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#08131b">
+    <title>VaultCenter</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <section id="login-panel" style="max-width:420px;margin:10vh auto;padding:24px">
+      <h1>Connexion à VaultCenter</h1>
+      <form id="login-form"><p><label>Utilisateur local <input name="username" autocomplete="username" required></label></p><p><label>Mot de passe <input name="password" type="password" autocomplete="current-password" required></label></p><button type="submit">Se connecter</button></form>
+      <p id="login-error" role="alert"></p><a id="oidc-login" href="/auth/oidc/login" hidden>Continuer avec Keycloak</a>
+    </section>
+    <div class="shell" id="console-panel" style="display:none">
+      <aside class="sidebar">
+        <a class="brand" href="/" aria-label="VaultCenter">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><path d="M9 12h30v24H9z"/><circle cx="17" cy="24" r="5"/><circle cx="31" cy="24" r="5"/><path d="M17 24h14M14 33h20"/></svg>
+          </span>
+          <span><strong>VaultCenter</strong><small>Archive control plane</small></span>
+        </a>
+        <nav aria-label="Navigation principale">
+          <a class="nav-item active" href="#dashboard">Vue d’ensemble</a>
+          <a class="nav-item" href="#cartridges">Cartouches</a>
+          <a class="nav-item" href="#jobs">Activité</a>
+        </nav>
+        <div class="sidebar-status">
+          <span class="pulse"></span>
+          <span><strong id="node-status">Connexion…</strong><small>VTL</small></span>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">PROXMOX BACKUP SERVER</p>
+            <h1>Bibliothèque virtuelle</h1>
+          </div>
+          <button class="secondary" id="logout-button" type="button">Se déconnecter</button>
+          <button class="secondary" id="refresh-button" type="button">Actualiser</button>
+        </header>
+
+        <section id="dashboard" class="stats" aria-label="Résumé">
+          <article class="stat-card accent">
+            <span class="stat-label">Cartouches</span>
+            <strong id="cartridge-count">—</strong>
+            <small>médias découverts</small>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Prêtes à exporter</span>
+            <strong id="sealed-count">—</strong>
+            <small>cartouches scellées</small>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Archives vérifiées</span>
+            <strong id="verified-count">—</strong>
+            <small>copies S3 contrôlées</small>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Jobs actifs</span>
+            <strong id="active-job-count">—</strong>
+            <small>file persistante</small>
+          </article>
+        </section>
+
+        <section id="cartridges" class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">MÉDIAS</p><h2>Cartouches</h2></div>
+            <span class="hint">Un média doit être scellé avant son export.</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Barcode</th><th>État</th><th>Utilisation</th><th>Génération</th><th></th></tr></thead>
+              <tbody id="cartridge-rows"><tr><td colspan="5" class="empty">Chargement…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="jobs" class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">JOURNAL</p><h2>Activité récente</h2></div>
+            <span class="hint">Actualisation automatique toutes les 3 secondes.</span>
+          </div>
+          <div id="job-list" class="job-list"><p class="empty">Aucun job.</p></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

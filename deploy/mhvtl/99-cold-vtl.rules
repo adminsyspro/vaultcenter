@@ -1,0 +1,1 @@
+ACTION=="add|change", KERNEL=="sg[0-9]*", SUBSYSTEM=="scsi_generic", PROGRAM=="/lib/udev/scsi_id --page=0x83 --whitelisted --device=$tempnode", RESULT=="350223344ab000100", SYMLINK+="tape/by-id/cold-vtl-drive-sg"

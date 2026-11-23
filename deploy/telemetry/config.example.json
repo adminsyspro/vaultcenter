@@ -1,0 +1,11 @@
+{
+  "output_dir": "/run/vaultcenter/telemetry",
+  "vtls": [{
+    "vtl_id": "00000000-0000-4000-8000-000000000001",
+    "fifo": "/run/vaultcenter-mhvtl-status/library-10.fifo",
+    "media_root": "/opt/mhvtl",
+    "library_queue_id": 10,
+    "require_heartbeat": true,
+    "drives": [{"queue_id": 11, "ordinal": 1, "label": "Drive 1", "pid_file": "/run/vaultcenter-mhvtl-11/pid"}]
+  }]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "cold-vtl-provider-s3"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+cold-vtl-core = { path = "../cold-vtl-core" }
+serde.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+libc = "0.2"
+aws-smithy-types = { version = "=1.6.3", features = ["http-body-1-x"] }
+http-body = "1"
+bytes = "1"
+
+[dev-dependencies]
+tokio.workspace = true

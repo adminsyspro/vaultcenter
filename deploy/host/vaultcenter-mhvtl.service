@@ -1,0 +1,21 @@
+[Unit]
+Description=VaultCenter mhvtl kernel module (rebuilt by DKMS when the booted kernel has none)
+# After the usual loading of modules (which fails when a kernel upgrade came
+# without its headers) and after the DKMS boot service; before Docker, so that
+# the appliance never starts without its tape devices.
+After=local-fs.target systemd-modules-load.service dkms.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# A rebuild takes a minute or two; whatever happens, the boot goes on after
+# this delay. Nothing requires this unit: a failure delays Docker, never blocks it.
+TimeoutStartSec=900
+# %v is the release of the running kernel (uname -r). What the command prints
+# goes to the journal: journalctl -u vaultcenter-mhvtl.
+ExecStart=/bin/sh -c 'modprobe mhvtl opts=0 && echo "mhvtl is loaded for kernel %v" && exit 0; echo "mhvtl is missing for kernel %v: rebuilding it with DKMS"; dkms autoinstall -k %v && modprobe mhvtl opts=0 && echo "mhvtl rebuilt by DKMS and loaded for kernel %v" && exit 0; echo "mhvtl could not be built or loaded for kernel %v: install linux-headers-%v, then run: dkms autoinstall -k %v && modprobe mhvtl opts=0" >&2; exit 1'
+ExecStartPost=-/sbin/modprobe sg
+
+[Install]
+WantedBy=multi-user.target

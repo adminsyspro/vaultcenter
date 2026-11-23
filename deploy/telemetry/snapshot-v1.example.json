@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "vtl_id": "00000000-0000-4000-8000-000000000001",
+  "generated_at": 1790932800000,
+  "observed_at": null,
+  "source": "mhvtl",
+  "status": "unavailable",
+  "reason": "source_missing",
+  "drives": [
+    {
+      "id": "11",
+      "label": "Drive 1",
+      "barcode": null,
+      "origin_slot": null,
+      "state": "unknown",
+      "observed_at": null,
+      "bytes_written": null,
+      "write_rate_bps": null
+    }
+  ],
+  "slots": [],
+  "media": []
+}

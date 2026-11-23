@@ -1,0 +1,7 @@
+{
+  "resources": [
+    {"library_id":20,"drive_id":21,"channel":0,"library_target":2,"drive_target":3,"target_id":20},
+    {"library_id":30,"drive_id":31,"channel":0,"library_target":4,"drive_target":5,"target_id":30}
+  ],
+  "bindings": {}
+}

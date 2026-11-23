@@ -1,0 +1,63 @@
+import {selectOption} from './helpers/select.mjs';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {chromium,expect} from '@playwright/test';
+import {createDemoHandler} from '../dev-demo.mjs';
+import {ageTelemetry,appendTransferHistory} from '../src/lib/telemetry.ts';
+import {staticUi} from './helpers/static-ui.mjs';
+import {telemetryFixture} from './helpers/telemetry-fixtures.mjs';
+const real=telemetryFixture();real.source='mhvtl';real.demo_transfer={id:'fake'};
+assert.equal(ageTelemetry(real,Date.now()).demo_transfer,undefined);
+assert.equal(appendTransferHistory(null,real),null);
+let clock=Date.now();const handler=createDemoHandler({now:()=>clock});let fallback=0;
+const server=createServer((req,res)=>{if(!handler(req,res)){fallback++;res.writeHead(404);res.end();}});
+await new Promise(r=>server.listen(0,'127.0.0.1',r));const api=`http://127.0.0.1:${server.address().port}`;
+const ui=await staticUi();let browser;
+try {
+ browser=await chromium.launch({executablePath:process.env.COLD_VTL_CHROMIUM,args:['--no-sandbox']});
+ const page=await browser.newPage({locale:'fr-FR',viewport:{width:1440,height:1000}});
+ await page.route(/\/(auth|v1|__demo)\//,async route=>{
+  const req=route.request();const url=new URL(req.url());
+  const response=await fetch(api+url.pathname+url.search,{method:req.method()});
+  await route.fulfill({status:response.status,contentType:'application/json',body:await response.text()});
+ });
+ await page.goto(ui.url+'/#media');
+ await selectOption(page.getByRole('combobox',{name:'Scénario de démonstration'}), 's3-export');
+ const panel=page.getByRole('region',{name:'Externalisation S3 simulée'});
+ await expect(panel).toBeVisible();
+ const stream=panel.locator('.s3-stream-packets');
+ await expect(stream).toHaveCSS('animation-name','s3-data-flow');
+ await expect(stream).toContainText('01001010');
+ const before=await stream.evaluate(n=>getComputedStyle(n).transform);await page.waitForTimeout(150);
+ const after=await stream.evaluate(n=>getComputedStyle(n).transform);
+ const translation=matrix=>Number(matrix.split(',')[4]);
+ assert.ok(translation(after)>translation(before),'Binary digits must move from left to right');
+ await expect(page.getByRole('article',{name:'Cartouche CVT001L8',exact:true})).toHaveCount(1);
+ await expect(panel.locator('.lto-reel-spin')).toHaveCSS('animation-name','none');
+ const chart=panel.getByRole('figure',{name:'Débit vers S3 de CVT001L8',exact:true});
+ await expect(chart).toContainText('8 Mio/s');
+ const cassette=await panel.locator('.lto-cartridge').boundingBox();const body=await panel.locator('.lto-drive-body').boundingBox();
+ assert.ok(body.height<=cassette.height+1);
+ clock+=5000;await expect(panel.getByRole('progressbar')).not.toHaveAttribute('value','0',{timeout:8000});
+ await page.emulateMedia({reducedMotion:'reduce'});await expect(stream).toHaveCSS('animation-name','none');
+ await page.emulateMedia({reducedMotion:'no-preference'});
+ // Advance sample into the stale past, then return a fresh completed observation.
+ clock=Date.now()-30000;await expect(panel).toContainText('Mesures interrompues',{timeout:8000});
+ await expect(stream).toHaveCSS('animation-name','none');
+ clock=Date.now();await page.getByRole('button',{name:'Relancer la simulation'}).click();
+ await expect(panel).toContainText('Externalisation vers S3',{timeout:8000});
+ await expect(chart.getByRole('cell').filter({hasText:'8 Mio/s'}).first()).toHaveText('8 Mio/s');
+ const restartedRates=await chart.getByRole('cell').filter({hasText:'Mio/s'}).allTextContents();
+ assert.ok(restartedRates.length>=1&&restartedRates.length<=2);
+ assert.ok(restartedRates.every(value=>value==='8 Mio/s'),'A restarted transfer must not inherit earlier transfer rates');
+ // Start far in the past, then observe completion at real current time.
+ clock=Date.now()-130000;await page.getByRole('button',{name:'Relancer la simulation'}).click();clock=Date.now();
+ await expect(panel).toContainText('Externalisation terminée',{timeout:8000});
+ await expect(panel).toContainText('100 %');await expect(stream).toHaveCSS('animation-name','none');
+ await expect(chart).toContainText('0 o/s');
+ await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await selectOption(page.getByRole('combobox',{name:'Scénario de démonstration'}), 'writing');
+ await expect(panel).toHaveCount(0,{timeout:8000});await expect(page.getByRole('figure',{name:'Débit de copie de CVT001L8',exact:true})).toBeVisible();
+ assert.equal(fallback,0);
+ console.log('PASS S3 demo: local transfer, animated flow, separate throughput, progress/completion/restart/staleness, compact/mobile, reduced motion, no upstream');
+} finally {await browser?.close();await ui.close();await new Promise(r=>server.close(r));}
