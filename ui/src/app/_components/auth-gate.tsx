@@ -2,17 +2,11 @@
 import {translate as t,useI18n,getLocale} from "@/lib/i18n";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { VaultCenterLogo } from "./vaultcenter-mark";
+import { LoginBackdrop } from "./login-backdrop";
+import { LoginCartridge } from "./login-cartridge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/card";
 import { request, setCsrfToken, type AuthUser, type Session } from "@/lib/api";
 import {LanguageSelector} from "./language-selector";
 import { Console } from "./console";
@@ -130,21 +124,30 @@ export function AuthGate() {
         )}
       </>
     );
+  // The front panel of the appliance, standing where the streams of the
+  // backdrop converge: its display asks who you are, the right half takes the
+  // credentials.
   return (
-    <main className="relative grid min-h-svh place-items-center bg-muted/30 p-4 pt-16 sm:pt-4">
+    <main className="lto-login-page">
+      <LoginBackdrop />
       <div className="absolute top-4 right-4"><LanguageSelector/></div>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <VaultCenterLogo className="mb-4 w-full rounded-md" />
-          <CardTitle className="text-2xl">
-            <h1>{t("Connexion à VaultCenter")}</h1>
-          </CardTitle>
-          <CardDescription>
-            {t("Accédez à votre bibliothèque et à vos copies S3.")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <section className="lto-chassis lto-login" aria-labelledby="login-title">
+        <div className="lto-rack-ear lto-rack-ear-left" aria-hidden="true"><i/><i/></div>
+        <div className="lto-rack-ear lto-rack-ear-right" aria-hidden="true"><i/><i/></div>
+        <div className="lto-login-display">
+          {/* The brand is the heading: it says where you sign in, read aloud as the full sentence. */}
+          <h1 id="login-title" className="lto-login-brand">
+            {/* The panel is dark in both themes: always the mark drawn for dark backgrounds. */}
+            <img src="/brand/vaultcenter-icon-dark.svg" width={961} height={789} alt="" className="lto-login-mark" />
+            <span className="vaultcenter-wordmark" aria-hidden="true">Vault<span>Center</span></span>
+            <span className="sr-only">{t("Connexion à VaultCenter")}</span>
+          </h1>
+          <LoginCartridge />
+        </div>
+        <div className="lto-login-panel">
+          <p className="lto-login-intro">{t("Accédez à votre bibliothèque et à vos copies S3.")}</p>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="lto-login-error">
               {t(error)}
             </p>
           )}
@@ -177,9 +180,8 @@ export function AuthGate() {
             </Button>
           </form>
           {config?.oidc && (
-            <div className="space-y-3 border-t pt-5">
-              <p className="text-center text-sm text-muted-foreground">
-                {t("Compte d’entreprise")}</p>
+            <div className="lto-login-sso">
+              <p>{t("Compte d’entreprise")}</p>
               <Button asChild variant="outline" className="w-full">
                 <a href="/auth/oidc/login">
                   {t('Continuer avec {provider}',{provider:config.oidc_label || 'SSO'})}
@@ -187,8 +189,8 @@ export function AuthGate() {
               </Button>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </main>
   );
 }

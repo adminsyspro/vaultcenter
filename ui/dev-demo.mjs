@@ -21,6 +21,7 @@ export function createDemoHandler({seedExports=true,crowded=false,now=Date.now,h
  const serviceNames=['mhvtl.target','vtllibrary@10.service','vtltape@11.service','tgt.service'];
  const serviceMap=value=>Object.fromEntries(serviceNames.map(name=>[name,value]));
  const powerStatus=()=>({configured:true,phase:powered?'online':'maintenance',ready:!powered,blocked:!powered,pbs_locked:!powered,services:serviceMap(powered?'active':'inactive'),original:powered?{}:serviceMap('active'),demo:true});
+ let signedOut=false;
  const session={user:{id:'local-demo',username:'démo',role:'admin',issuer:null,disabled:false},csrf_token:'demo-only'};
  const history=createDemoHistory({file:historyFile,now,retentionDays});
  function snapshot() {
@@ -128,8 +129,10 @@ export function createDemoHandler({seedExports=true,crowded=false,now=Date.now,h
   req.resume();
   if(path==='/health'){send({status:'ok',demo:true});return true;}
   if(path==='/auth/config'){send({local:true,oidc:false,demo:true});return true;}
-  if(['/auth/me','/auth/login'].includes(path)){send(session);return true;}
-  if(path==='/auth/logout'){send({ok:true});return true;}
+  // Signing out shows the sign-in page; any credentials sign back in.
+  if(path==='/auth/me'){if(signedOut){send({error:'authentication required'},401);return true;}send(session);return true;}
+  if(path==='/auth/login'){signedOut=false;send(session);return true;}
+  if(path==='/auth/logout'){signedOut=true;send({ok:true});return true;}
   if(path==='/__demo/scenario'&&req.method==='POST') {
    if(!powered){send({error:'Remettez la bibliothèque en service avant de lancer un scénario.'},409);return true;}
    const next=url.searchParams.get('state');
