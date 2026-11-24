@@ -230,6 +230,9 @@ deletes nothing on failure.
 it exists)
 
 - `targets.conf` (0600), reduced to a comment: it is not read in isolated mode.
+- `cold-vtl/vtl-runtime.json` (0600): the pool of mhVTL resources (library,
+  drive, iSCSI target) that new VTLs take from, four VTLs' worth. The appliance
+  does not start in isolated mode without it.
 - `cold-vtl/auth.env` (0600), with `COLD_VTL_PUBLIC_URL=https://<name>:8443`;
   `cold-vtl/tls/fullchain.pem` (0644) and `privkey.pem` (0600);
   `cold-vtl/maintenance/`.

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A new installation no longer stays stuck at the startup step: the installer now writes the pool of mhVTL resources (`vtl-runtime.json`) that the appliance requires in isolated mode.
+
 ## [0.2.3] - 2026-11-24
 
 ### Changed

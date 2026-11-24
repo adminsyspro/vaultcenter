@@ -1446,6 +1446,22 @@ install_isolation_receipt() {
     record_state isolation_receipt missing
 }
 
+# write_runtime_pool <path>: four VTLs' worth of mhVTL resources, without
+# collisions (queue ids, iSCSI target ids and SCSI addresses all distinct).
+write_runtime_pool() {
+    cat >"$1" <<'POOL'
+{
+  "resources": [
+    {"library_id": 20, "drive_id": 21, "channel": 0, "library_target": 2, "drive_target": 3, "target_id": 20},
+    {"library_id": 30, "drive_id": 31, "channel": 0, "library_target": 4, "drive_target": 5, "target_id": 30},
+    {"library_id": 40, "drive_id": 41, "channel": 0, "library_target": 6, "drive_target": 7, "target_id": 40},
+    {"library_id": 50, "drive_id": 51, "channel": 0, "library_target": 8, "drive_target": 9, "target_id": 50}
+  ],
+  "bindings": {}
+}
+POOL
+}
+
 step_configuration() {
     local config="${HOST_DIR}/config" cold="${HOST_DIR}/config/cold-vtl" example san old_umask
     example="${PAYLOAD_ROOT}/${IMAGE_VERSION}/host/auth.env.example"
@@ -1464,6 +1480,12 @@ step_configuration() {
         printf '# VTLs are created in the VaultCenter console; this file is not read in isolated mode.\n' >"${config}/targets.conf"
     fi
     chmod 600 "${config}/targets.conf"
+    # The pool each new VTL takes its mhVTL library, drive and iSCSI target
+    # from. The appliance refuses to start in isolated mode without it.
+    if [[ ! -f "${cold}/vtl-runtime.json" ]]; then
+        write_runtime_pool "${cold}/vtl-runtime.json"
+    fi
+    chmod 600 "${cold}/vtl-runtime.json"
     if [[ ! -f "${cold}/tls/fullchain.pem" || ! -f "${cold}/tls/privkey.pem" ]]; then
         san="$(subject_alt_names)"
         if ! run_logged openssl req -x509 -newkey rsa:2048 -nodes -days 825 \

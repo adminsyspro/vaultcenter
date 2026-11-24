@@ -1508,6 +1508,26 @@ class FreshInstallTest(unittest.TestCase):
         content = targets.read_text().splitlines()
         self.assertEqual(len(content), 1)
         self.assertTrue(content[0].startswith("#"))
+        # Without the runtime pool the appliance refuses to start in isolated mode.
+        self.assertEqual(self.mode_of(config + "/cold-vtl/vtl-runtime.json"), 0o600)
+        pool = json.loads(self.path(config + "/cold-vtl/vtl-runtime.json").read_text())
+        self.assertEqual(pool["bindings"], {})
+        self.assertEqual(len(pool["resources"]), 4)
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cold-vtl"))
+        from vtl_runtime import Registry
+        Registry(self.sb.root, pool).validate_pool()
+
+    def test_a_resumed_installation_keeps_the_runtime_pool(self):
+        # A run that stops at startup, a pool edited by the operator, then a resume.
+        self.sb.scenario("docker", ["inspect", "--format", HEALTH_FORMAT], stdout="starting\n")
+        self.assertEqual(self.sb.run(*self.ARGS).returncode, 4)
+        pool = self.path(self.HOST + "/config/cold-vtl/vtl-runtime.json")
+        edited = '{"resources": [], "bindings": {"x": 1}}\n'
+        pool.write_text(edited)
+        self.sb.reset_scenario()
+        self.install()
+        self.assertEqual(pool.read_text(), edited)
 
     def test_certificate_names_the_host_and_its_addresses(self):
         self.install()
