@@ -18,7 +18,7 @@ SHIPPED = [
     '99-vaultcenter.rules', 'compose.yaml', 'auth.env.example', 'update.py', 'vtl_runtime.py',
     'install.md',
 ]
-# The isolation receipt is shipped only by a version that changes vtl_runtime.py.
+# The isolation receipt of the shipped vtl_runtime.py; the Dockerfile copies it when present.
 OPTIONAL_RECEIPT = 'deploy/cold-vtl/isolation-qualified.jso[n]'
 
 
@@ -64,6 +64,17 @@ class InstallPayloadTest(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn('deploy/cold-vtl/vtl_runtime.py', lines[0].split())
         self.assertTrue(lines[0].endswith(HOST_DIR))
+
+    def test_shipped_receipt_matches_the_shipped_runtime(self):
+        # Without a matching receipt no VTL can be activated on a new installation,
+        # and install.sh only logs that it skipped the receipt. A change to
+        # vtl_runtime.py needs a new isolation acceptance and a new receipt.
+        import json
+        receipt = json.loads((ROOT / 'deploy/cold-vtl/isolation-qualified.json').read_text())
+        runtime = hashlib.sha256((ROOT / 'deploy/cold-vtl/vtl_runtime.py').read_bytes()).hexdigest()
+        self.assertIs(receipt['isolation_verified'], True)
+        self.assertEqual(receipt['runtime_sha256'], runtime,
+                         'vtl_runtime.py changed: run the isolation acceptance and ship its new receipt')
 
     def test_dkms_conf_declares_the_module(self):
         text = (ROOT / 'deploy/install/dkms.conf').read_text()

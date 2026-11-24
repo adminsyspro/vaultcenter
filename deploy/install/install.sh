@@ -1627,9 +1627,9 @@ print_summary() {
     printf '                        (self-signed certificate: compare it in your browser)\n\n'
     printf '  VTLs are created in the console, after logging in.\n'
     if [[ "$(state_value isolation_receipt)" == "missing" ]]; then
-        printf '  This version provides no isolation receipt: S3 exports stay refused\n'
-        printf '  by the appliance until a receipt is installed (see "The isolation receipt" in\n'
-        printf '  %s).\n' "$(doc_path)"
+        printf '  This version provides no isolation receipt: no VTL can be activated and\n'
+        printf '  S3 exports stay refused until a receipt is installed (see\n'
+        printf '  "The isolation receipt" in %s).\n' "$(doc_path)"
     fi
     if [[ "$(state_value public_is_address)" == "1" ]]; then
         printf '  The full name of the machine is unusable: an IP address (%s) serves as\n' "${name}"

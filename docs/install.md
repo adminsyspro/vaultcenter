@@ -388,16 +388,17 @@ See [docker.md](docker.md), "Operator configuration".
 
 The isolation receipt (`isolation-qualified.json`) is the record that an
 isolation qualification was carried out on a specific `vtl_runtime.py`: it
-carries its `runtime_sha256` and `isolation_verified`. The appliance refuses to
-start the workers, and therefore the **S3 exports**, without a receipt that
-matches its `vtl_runtime.py`. The qualification is a separate procedure; the
-script qualifies nothing.
+carries its `runtime_sha256` and `isolation_verified`. Without a receipt that
+matches its `vtl_runtime.py`, the appliance refuses to **activate a VTL**, to
+**publish its iSCSI target** at startup and to start the workers, and therefore
+the **S3 exports**. Each version ships the receipt of its own qualification. The
+qualification is a separate procedure; the script qualifies nothing.
 
 At installation, the script installs the receipt shipped with the version
 **when there is one** and it matches the `vtl_runtime.py` of that version (same
 sha256, `isolation_verified` true). Otherwise it installs nothing, records
-`isolation_receipt=missing`, and the summary warns that S3 exports stay
-refused until a receipt is installed.
+`isolation_receipt=missing`, and the summary warns that no VTL can be activated
+and that S3 exports stay refused until a receipt is installed.
 
 ## Updating
 

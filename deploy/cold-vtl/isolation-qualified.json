@@ -1,0 +1,26 @@
+{
+  "isolation_verified": true,
+  "runtime_sha256": "faa0aebcf06523a6f4d8edbf0bd8b01d35dea89a788d4988c7e1b93e8f264a81",
+  "image": "sha256:46b30230810e0df3c474d83820d7dee68d7dfe38b9b72d2342aac621872c406d",
+  "evidence": "VaultCenter 0.2.4 two-VTL isolation acceptance on a dedicated lab appliance and PBS: continuity probe in both directions (PBS restores on one VTL while the other enters and leaves maintenance, no peer or shared service restart) and storage mount probe (hot storage change, read-only fallback, missing source rejected, restart without the absent VTL)",
+  "evidence_sha256": "c32f6b46edfa26af141daed089ddc2fbe38bfd0717cfa0a8c27d888604e4fbf4",
+  "qualified_at": "2026-11-24T17:26:52Z",
+  "test_vtls": [
+    "73e7d21f-c3c0-409e-ba7e-cb14c29f3bd5",
+    "99931d33-abaa-49de-93f7-5340a549a3f5"
+  ],
+  "cases": [
+    {
+      "maintenance": "73e7d21f-c3c0-409e-ba7e-cb14c29f3bd5",
+      "reading": "99931d33-abaa-49de-93f7-5340a549a3f5",
+      "pbs_restores": 140,
+      "failures": 0
+    },
+    {
+      "maintenance": "99931d33-abaa-49de-93f7-5340a549a3f5",
+      "reading": "73e7d21f-c3c0-409e-ba7e-cb14c29f3bd5",
+      "pbs_restores": 188,
+      "failures": 0
+    }
+  ]
+}
