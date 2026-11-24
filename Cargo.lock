@@ -906,7 +906,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "cold-vtl-api"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "argon2",
  "axum",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "cold-vtl-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "cold-vtl-core",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "cold-vtl-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "cold-vtl-provider-s3"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "cold-vtl-worker"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "base64 0.22.1",

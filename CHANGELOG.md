@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-24
+
 ### Changed
 
 - The sign-in page shows the appliance front panel over a backdrop of light streams, with the logo and a cartridge being written, instead of a plain card.
