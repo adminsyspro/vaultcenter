@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-24
+
 ### Fixed
 
 - The image ships the isolation receipt of its runtime, from a two-VTL isolation acceptance on a dedicated lab appliance and PBS. Without it, a new installation could not activate any VTL.
